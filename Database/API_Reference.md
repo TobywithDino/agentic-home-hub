@@ -1,6 +1,6 @@
 # API Reference — DB Access API Server
 
-本文件是 `api_server/` 的完整 API 規格參考，記錄全部 77 個業務端點的路徑、方法、請求/回應型別，並標註每個端點對應圖面需求（`AI指示文件/DB_API_1.jpg`、`DB_API_2.jpg`）或設計來源。
+本文件是 `api_server/` 的完整 API 規格參考，記錄全部 78 個業務端點的路徑、方法、請求/回應型別，並標註每個端點對應圖面需求（`AI指示文件/DB_API_1.jpg`、`DB_API_2.jpg`）或設計來源。
 
 > **本文件已於 2026-07-31 對照實際程式碼（`api_server/app/routers/*.py` 的路由定義 + FastAPI 自動生成的 `/openapi.json`）逐條核對，路徑與方法 100% 一致，無遺漏或錯誤。**
 
@@ -306,6 +306,7 @@
 | 63 | `GET /form-topics/{topic_id}/county-district-relations` | 題目縣市行政區對應列表(分頁) | - | `PagedResponse<CountyDistrictRelationOut>` | 管理端CRUD |
 | 64 | `POST /form-topics/{topic_id}/county-district-relations` | 新增對應關係 | `CountyDistrictRelationCreate` | `CountyDistrictRelationOut`（201） | 管理端CRUD |
 | 65 | `DELETE /form-topics/{topic_id}/county-district-relations` | 刪除對應關係 | `CountyDistrictRelationDelete`（⚠️用body帶完整複合主鍵,非路徑參數） | 無內容（204） | 管理端CRUD |
+| 78 | `GET /vendors/{service_vendor_id}/forms/full` | 獲取廠商表單內容：該廠商所有已審核且啟用表單的完整結構 | - | 見下方（非分頁,純陣列） | 新增功能，圖面未涵蓋 |
 
 **`FormOut`**
 
@@ -348,6 +349,8 @@
   ]
 }
 ```
+
+**`GET /vendors/{service_vendor_id}/forms/full` 回傳結構**：`FormFullOut[]`（陣列，每個元素結構與上方 `GET /forms/{form_id}/full` 完全相同），只包含 `is_deleted='0'` 且 `is_enable='1'` 且 `review_status='1'`（已審核）的表單。
 
 **`FormGroupOut`**
 
@@ -563,6 +566,7 @@
 | 圖2 | 更新order | #74 |
 | 圖2 | 設定商家資訊 | #14（商家屬性）+ #39（聯絡方式） |
 | 圖2 | 登入 | #36 |
+| - | 獲取廠商表單內容（新增功能，圖面未涵蓋） | #78 |
 
 ---
 
@@ -583,3 +587,4 @@
 ## 版本紀錄
 
 - **2026-07-31**：由 `DB_API_table.md` 重新命名為 `API_Reference.md`，並對照實際 `api_server` 程式碼與 `/openapi.json` 逐條核對（77個端點路徑/方法100%一致），新增所有端點的 Request Body / 回傳型別完整說明。
+- **2026-07-31**：新增 `GET /vendors/{service_vendor_id}/forms/full`（#78，見 `forms.py`），補上圖面未涵蓋的「獲取廠商表單內容」功能：輸入 service_vendor_id，回傳該廠商所有已審核且啟用表單的完整結構，避免前端需自行迴圈呼叫 #41+#43。

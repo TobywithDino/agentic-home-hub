@@ -131,6 +131,25 @@ def get_form_full(form_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/vendors/{service_vendor_id}/forms/full")
+def list_vendor_forms_full(service_vendor_id: int, db: Session = Depends(get_db)):
+    """獲取廠商表單內容：輸入 service_vendor_id，回傳該廠商底下所有
+    「已審核且啟用」表單的完整結構(每筆重用 get_form_full 的組裝邏輯)，
+    供 APP 選表單/填單頁面一次取得，不需再對每筆表單各打一次 /forms/{id}/full。
+    """
+    forms = db.execute(
+        select(PmsForm)
+        .where(
+            PmsForm.service_vendor_id == service_vendor_id,
+            PmsForm.is_deleted == "0",
+            PmsForm.is_enable == "1",
+            PmsForm.review_status == "1",
+        )
+        .order_by(PmsForm.id)
+    ).scalars().all()
+    return [get_form_full(f.id, db) for f in forms]
+
+
 @router.post("/forms", response_model=FormOut, status_code=201)
 def create_form(payload: FormCreate, db: Session = Depends(get_db)):
     now = now_utc()
