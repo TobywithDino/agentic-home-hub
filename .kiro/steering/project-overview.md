@@ -13,23 +13,29 @@ agentic-home-hub/
 ├── Database/                隊友負責：資料庫 + DB Access API
 │   ├── 部署手冊.md            本機建置 + AWS 遷移完整手冊
 │   ├── AWS操作手冊.md         目前 AWS 環境連線/操作指南（EC2 IP、SSM 連線方式等）
-│   ├── API_Reference.md      api_server 78 個端點完整規格
+│   ├── API_Reference.md      api_server 94 個端點完整規格
 │   ├── database/             DDL（*.sql）+ 種子資料（*.json）+ 建置腳本
 │   └── api_server/           FastAPI，直接操作 PostgreSQL，跑在 EC2 8000 埠
-│       └── app/routers/      geo / catalog / accounts / forms / feedbacks / orders
+│       └── app/routers/      geo / catalog / accounts / forms / feedbacks / orders / reviews / summaries
 ├── bff_server/               我方負責：BFF（Backend For Frontend）
 │   ├── README.md             架構說明 + 端點對應表
-│   ├── deploy.sh             一鍵部署到 EC2 的腳本
+│   ├── API.md                端點規格
 │   └── app/
 │       ├── client.py         封裝呼叫 Database/api_server 的 httpx client
+│       │                     （含 get_optional 把 404 當空值、get_all_items 自動分頁抓全部）
 │       ├── config.py         環境變數設定
+│       ├── review_utils.py   共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
 │       └── routers/
-│           ├── app_api.py       APP 前端呼叫的 5 支 API
-│           └── merchant_api.py  商家後台呼叫的 7 支 API
+│           ├── app_api.py       APP 前端呼叫的 11 支 API
+│           └── merchant_api.py  商家後台呼叫的 14 支 API
 ├── agent_service/            我方負責：AI 管家（AgentCore Runtime，CodeZip 部署，不用 Docker）
 │   ├── agentcore/
 │   │   ├── agentcore.json    宣告式設定：runtime + memory（源頭真相，別改生成的 CDK）
-│   │   └── aws-targets.json  部署目標（account + region）
+│   │   ├── aws-targets.json  部署目標（account + region）**不進版控**，複製 .example 版本自己填
+│   │   └── cdk/              agentcore deploy 用的 CDK 專案（由 CLI scaffold，通用模板）
+│   ├── invoke_test.py        測 agent 對話（繞開 agentcore invoke 的 payload 包裝限制）
+│   ├── check_memory.py       直接查 Memory 有沒有萃取出偏好
+│   ├── load-creds.ps1        把 .env 憑證載進當前 shell（用 `. .\load-creds.ps1` dot-source）
 │   └── app/AiButler/         codeLocation，agentcore.json 指向這裡
 │       ├── main.py           BedrockAgentCoreApp 入口（@app.entrypoint）
 │       ├── pyproject.toml    依賴（uv 管理）
@@ -42,7 +48,10 @@ agentic-home-hub/
 │       ├── schemas.py        事件協定 + 草稿模型
 │       ├── config.py         環境變數設定
 │       └── Dockerfile        備用：想切換成 Container build 才需要
-└── flutter_ai_script/        我方負責：Flutter 端 AI 管家相關程式碼
+├── ai-butler-app/            隊友負責：Flutter APP 本體（含 AI 管家聊天畫面）
+├── ai-summary-lambda/        隊友負責：評論摘要 Lambda（Bedrock 產生 mms_review_summary）
+├── vendor-admin-web/         隊友負責：商家後台前端（React + Vite + Tailwind）
+└── flutter_ai_script/        我方負責：AI 管家的 Flutter 參考實作（待併入 ai-butler-app）
     └── lib/agent/
         ├── agent_client.dart      SSE 客戶端
         ├── agent_event.dart       SSE 事件模型（要跟 schemas.py 同步）
@@ -97,24 +106,21 @@ agentic-home-hub/
 
 ## 部署 bff_server 更新
 
-改完 `bff_server/` 程式碼後，用 `bff_server/deploy.sh` 部署到 EC2：
-
-```bash
-cd bff_server
-bash deploy.sh
-```
-
-流程：打包 → 上傳 S3（`s3://aiwave-deploy-728259505479-uswest2/`）→ SSM 送指令到 EC2 解壓、裝依賴、重啟 `bff-api` service → 確認安全群組開 8100 埠 → health check 驗證。
-
-需要先設定好 AWS CLI profile（`aws configure --profile agentic-home-hub`）才能執行，憑證跟保管人要。
+⚠️ `bff_server/deploy.sh` 已在合併中被移除，目前沒有一鍵部署腳本。要部署得手動走：
+打包 → 上傳 S3 → SSM 送指令到 EC2 解壓、裝依賴、重啟 `bff-api` service → health check 驗證。
+需要 AWS 臨時憑證（跟保管人要）。要恢復腳本的話問一下當初刪除的隊友。
 
 ## 部署 agent_service（AI 管家）
 
 不跑在 EC2 上，跑在 AWS Bedrock AgentCore Runtime，全部透過 AgentCore CLI 操作。
 **不需要 Docker** —— 用 CodeZip build，CLI 打包 zip 上傳，AWS 管語言執行環境。
 
+第一次 clone 下來要先建 `agentcore/aws-targets.json`（它含 AWS account id，不進版控）：
+複製 `agentcore/aws-targets.example.json` 改名後填入自己的 account id。
+
 ```bash
 cd agent_service
+. .\load-creds.ps1           # 先把 .env 憑證載進當前 shell（注意前面的點）
 agentcore validate           # 檢查 agentcore.json
 agentcore dev --no-browser   # 本機起服務（port 8080，hot reload）
 agentcore deploy             # 合成 CDK 並部署（第一次含建 Memory 與 IAM）
@@ -146,14 +152,20 @@ agentcore logs               # 看 runtime 日誌
 
 - **cms_homepage_service_vendor**：服務商主檔（`id`, `name`, `description`）
 - **cms_homepage_service**：服務項目主檔，`type` 欄位代表服務類型：
-  1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物
+  1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物。`form_id`（新增，nullable，對應`pms_form.id`）指定該服務項目對應哪張諮詢表單，解決「查某個service要對應到哪張form」的查詢缺口（原設計只有`pms_form.service_vendor_id`反向關聯，無法從單一service_id直接查到表單）。多個service可共用同一`form_id`；`NULL`代表尚未設定專屬表單；跟`pms_form`本身供B端/客服/轉訂單流程使用的通用表單無關，那些表單不透過此欄位查詢。
 - **label / service_label**：標籤主檔 + 服務項目與標籤的多對多關聯表
 - **user_accounts / vendor_accounts**：會員 / 商家後台登入帳號（密碼 bcrypt 雜湊，個資 AES-256-GCM 加密存 `bytea`，同時有明文欄位對應的 `_hash` 欄位可查詢比對）
 - **mms_order_record**：訂單/訂位統一紀錄表
-- **pms_form 系列**：諮詢表單結構（group → topic → option/media）
+- **mms_order_review**：訂單評價，`record_id` 直接沿用對應 `mms_order_record.record_id`（1:0..1，無獨立序列），一筆訂單至多一筆評價由 PK 天然保證。新增評價會同步把訂單的 `comment_status` 改成 `02`。`GET /services/{service_id}/reviews` 是全平台唯一不需身分驗證即可呼叫的公開端點（評價牆，回傳精簡過的 `PublicReviewOut`）。bff_server 所有回傳訂單的端點（`view_orders`、`list_orders`、`create_order`、`update_order`）都會用 `review_utils.py` 把對應評價併入訂單物件的 `review` 欄位（沒評價過則為 `null`），前端不需要另外呼叫評價 API。使用者提交評價走 `app_api.py` 的 `POST /orders/{record_id}/review`，修改評價走 `PATCH /users/{inbr_account_id}/orders/{record_id}/review`（皆為轉發 api_server，業務規則如訂單須完成、身分比對、防重複皆由 api_server 驗證）。批次查詢完整評價（回傳未經裁切的 `ReviewOut` 完整欄位，用 `client.py` 的 `get_all_items` 自動處理分頁抓取全部資料）：商家視角在 `merchant_api.py` 的 `GET /vendors/{id}/reviews`，APP 端依服務項目查詢在 `app_api.py` 的 `GET /services/{id}/reviews`（注意跟 api_server 同名的公開評價牆端點不同，這支回傳含身分關聯的完整內容，不適合當公開頁面用）
+- **pms_form 系列**：諮詢表單結構（form → group → topic → option/media）。merchant_api.py 的 `POST /forms` 提供一次性建立表單+巢狀題組/題目/選項的組裝端點；`PATCH /forms/{id}` 提供差異比對式的完整表單更新（前端傳整包巢狀結構，帶 `id` 的項目視為更新、不帶 `id` 視為新增、現況有但 payload 沒帶到的視為刪除，依 選項→題目→題組 順序刪除、表單→題組→題目→選項 順序新增/更新）；兩者皆因 api_server 只有單筆 CRUD 端點、無跨資源交易機制，BFF 依序呼叫多支端點組裝，中途失敗不會自動回滾。`GET /vendors/{id}/forms`（清單，僅主檔）、`GET /forms/{id}/full`（單張表單完整巢狀內容，直接轉發 api_server 現成端點）
 - **pms_form_feedback**：使用者填寫表單後的回饋記錄
+- **mms_review_summary_service / mms_review_summary_vendor**：評價AI摘要表（`Database/database/mms_review_summary.sql`，新增功能，目前無種子資料）。皆為「覆寫式快取」設計，同一個key只保留最新1筆，重新生成時直接覆蓋，不留歷史版本：
+  - `mms_review_summary_service`：PK為`service_id`（與`cms_homepage_service.id`共用值），彙整單一服務項目底下所有`mms_order_review`的AI摘要，面向使用者與供應商共用同一份內容。
+  - `mms_review_summary_vendor`：PK為`service_vendor_id`，彙整供應商名下所有服務的評價，多一個`service_breakdown`欄位（JSON陣列快取各服務的評價數/平均分），僅供供應商後台使用。
+  - 兩張表都有`generate_status`（`00`待生成/`01`生成中/`02`已完成/`03`失敗）與`latest_review_cre_time`欄位，用於支援非同步生成流程與判斷摘要是否過期需重新生成。
+  - `api_server/app/routers/summaries.py` 已實作對應的9支端點（`GET`/`PUT`/`PATCH .../status`/`DELETE`，服務項目與供應商各一組，供應商多一支清單端點），**只負責讀寫這兩張表，不呼叫LLM**，實際生成AI摘要內容的流程（呼叫Bedrock等模型）由上層服務負責再把結果`PUT`回來。`GET`回應含計算欄位`is_stale`（即時比對`mms_order_review`最新聚合值判斷摘要是否過期）。`bff_server`尚未有對應轉發端點。詳細規格見`Database/API_Reference.md`「I2. 評價AI摘要」章節。
 
-完整規格見 `Database/API_Reference.md` 和 `Database/database/*.sql` 的欄位註解（COMMENT ON COLUMN）。
+完整規格見 `Database/API_Reference.md` 和 `Database/database/*.sql` 的欄位註解（COMMENT ON COLUMN）。整體18張表的關係圖與逐欄位種子資料覆蓋狀況見 `Database/database/README.md`。
 
 ## bff_server 開發慣例
 

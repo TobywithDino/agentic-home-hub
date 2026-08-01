@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 
 from app.client import DbApiClient
 from app.deps import get_db_api_client
+from app.review_utils import attach_reviews_to_orders
 
 router = APIRouter(prefix="/app-api", tags=["APP 端"])
 
@@ -88,6 +89,93 @@ async def find_vendors_by_service(
     return vendors
 
 
+@router.get("/vendors/{service_vendor_id}/services")
+async def list_vendor_services(
+    service_vendor_id: int,
+    service_type: str | None = None,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某個廠商提供的服務項目（可依服務類型篩選）
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID（從 `find_vendors_by_service` 回傳的 `id` 取得）
+    - `service_type` (query, string, 可選): 服務類型代碼，只回傳該類型的服務。
+      1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物。
+      不傳則回傳該 vendor 名下全部服務項目。
+
+    **輸出**：服務項目陣列
+    ```json
+    [
+      {
+        "id": 17,
+        "service_vendor_id": 1,
+        "type": "10",
+        "name": "水電修繕-一般維修",
+        "img_url": "https://...",
+        "description": "服務項目描述",
+        "form_id": 9
+      }
+    ]
+    ```
+    `form_id` 是該服務項目對應的諮詢表單 ID，前端可直接拿此值
+    呼叫 `GET /app-api/forms/{form_id}/full` 取得表單完整結構供使用者填寫。
+
+    **說明**
+
+    前端在找到廠商後，點進廠商詳情頁時呼叫此 API 取得該廠商的服務項目。
+    可透過 `service_type` 參數篩選特定類型（例如只看水電修繕），
+    不傳則回傳全部。每個服務項目帶有 `form_id`，前端可據此導向對應的
+    諮詢表單填寫頁面。
+    """
+    params: dict = {"service_vendor_id": service_vendor_id, "limit": 200}
+    if service_type is not None:
+        params["type"] = service_type
+    resp = await db_api.get("/services", params=params)
+    return resp.json()["items"]
+
+
+@router.get("/forms/{form_id}/full")
+async def get_form_full(
+    form_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某張表單的完整內容（含題組/題目/選項/圖片/地區關聯）
+
+    **輸入**
+    - `form_id` (path, int): 表單 ID
+
+    **輸出**：完整巢狀表單結構
+    ```json
+    {
+      "form": {
+        "id": 10, "service_vendor_id": 1, "type": "1", "sub_type": "1",
+        "name": "居家清潔諮詢表", "review_status": "0", "is_enable": "1", "...": "..."
+      },
+      "groups": [
+        { "id": 20, "form_id": 10, "name": "基本資料", "sort": 0, "...": "..." }
+      ],
+      "topics": [
+        {
+          "id": 30, "form_id": 10, "form_group_id": 20,
+          "type": "3", "title": "您需要哪種清潔服務？", "is_required": "1", "sort": 0,
+          "media": [ { "id": 50, "img_url": "https://...", "sort": 0 } ],
+          "options": [ { "id": 40, "option_name": "居家清潔", "unit_price": 1000, "...": "..." } ],
+          "county_district_relations": []
+        }
+      ]
+    }
+    ```
+
+    **說明**
+
+    APP 端使用者要填寫諮詢表單前，呼叫此端點取得表單完整結構
+    （所有題組、題目、選項、輔助圖片、地區限制），供前端渲染填單頁面。
+    直接轉發 api_server 現成的組裝端點，未做額外處理。
+    """
+    resp = await db_api.get(f"/forms/{form_id}/full")
+    return resp.json()
+
+
 @router.post("/feedbacks", status_code=201)
 async def create_feedback(
     payload: dict,
@@ -142,24 +230,203 @@ async def view_orders(
     ```json
     {
       "feedbacks": [ { "feedback_no": "...", "status": "0", "...": "..." } ],
-      "orders": [ { "record_id": 1, "order_no": "...", "order_status": "12", "...": "..." } ]
+      "orders": [
+        {
+          "record_id": 1, "order_no": "...", "order_status": "12",
+          "review": { "overall_rating": 5, "review_content": "..." },
+          "...": "..."
+        }
+      ]
     }
     ```
     - `feedbacks`：狀態為未處理（`status="0"`）的諮詢回饋單
-    - `orders`：該會員的全部訂單
+    - `orders`：該會員的全部訂單，每筆訂單附加 `review` 欄位——
+      有評價過的訂單是完整評價物件，沒評價過則是 `null`
 
     **說明**
 
     取得該會員的未處理諮詢與全部訂單，組裝後一次回傳，
-    供前端顯示訂單/諮詢總覽頁面。
+    供前端顯示訂單/諮詢總覽頁面。訂單評價（`mms_order_review`）
+    一併查出並附加到對應訂單上，前端不需要再另外呼叫評價 API。
     """
     feedbacks_resp = await db_api.get(f"/users/{inbr_account_id}/feedbacks", params={"limit": 200})
     orders_resp = await db_api.get(f"/users/{inbr_account_id}/orders", params={"limit": 200})
+    reviews_resp = await db_api.get(f"/users/{inbr_account_id}/reviews", params={"limit": 200})
 
     feedbacks = [f for f in feedbacks_resp.json()["items"] if f["status"] == "0"]
     orders = orders_resp.json()["items"]
+    reviews = reviews_resp.json()["items"]
+
+    orders = attach_reviews_to_orders(orders, reviews)
 
     return {"feedbacks": feedbacks, "orders": orders}
+
+
+@router.post("/orders/{record_id}/review", status_code=201)
+async def create_order_review(
+    record_id: int,
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """對已完成的訂單提交評價
+
+    **輸入**
+    - `record_id` (path, int): 訂單內部 ID（`mms_order_record.record_id`）
+    - body：
+    ```json
+    {
+      "inbr_account_id": "019c0464-2d01-73f0-9f9b-d1392fdb941a",
+      "overall_rating": 5,
+      "rating_detail": { "service": 5, "attitude": 4 },
+      "review_content": "服務很好，準時到府",
+      "media": ["https://.../photo1.jpg"]
+    }
+    ```
+    `overall_rating` 為 1~5 的整數；`rating_detail`、`review_content`、`media` 皆為可選。
+
+    **輸出**：建立後的完整評價物件
+    ```json
+    {
+      "record_id": 1, "order_no": "...", "service_vendor_id": 1, "service_id": 17,
+      "inbr_account_id": "...", "overall_rating": 5, "review_content": "...",
+      "status": "01", "cre_time": "..."
+    }
+    ```
+
+    **說明**
+
+    使用者對一筆已完成訂單提交評價（一筆訂單至多一筆評價）。
+    api_server 會驗證：訂單狀態須為 `80`（已完成）、`inbr_account_id`
+    須與訂單的下單會員一致、且該訂單尚未被評價過（否則回 409）。
+    成功後會自動把對應訂單的 `comment_status` 改成 `02`（已評價）。
+    """
+    resp = await db_api.post(f"/orders/{record_id}/review", json=payload)
+    return resp.json()
+
+
+@router.patch("/users/{inbr_account_id}/orders/{record_id}/review")
+async def update_order_review(
+    inbr_account_id: str,
+    record_id: int,
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """修改自己對某筆訂單提交過的評價
+
+    **輸入**
+    - `inbr_account_id` (path, uuid): 會員 UUID（須為原評價者本人）
+    - `record_id` (path, int): 訂單內部 ID
+    - body（只需傳要修改的欄位）：
+    ```json
+    {
+      "overall_rating": 4,
+      "rating_detail": { "service": 4, "attitude": 5 },
+      "review_content": "補充：後續維修也很快",
+      "media": ["https://.../photo2.jpg"]
+    }
+    ```
+    `overall_rating` 若有傳必須是 1~5 的整數。
+
+    **輸出**：更新後的完整評價物件
+
+    **說明**
+
+    使用者修改自己先前提交的評價。api_server 會比對 `inbr_account_id`
+    是否與該筆評價的原評價者一致，不一致回 403；訂單尚未被評價過則回 404。
+    """
+    resp = await db_api.patch(f"/users/{inbr_account_id}/orders/{record_id}/review", json=payload)
+    return resp.json()
+
+
+@router.get("/services/{service_id}/reviews")
+async def get_service_reviews(
+    service_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某個服務項目底下全部訂單的評價（完整內容）
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+
+    **輸出**：評價物件陣列（不分頁，一次回傳全部）
+    ```json
+    [
+      {
+        "record_id": 1, "order_no": "...", "service_vendor_id": 1, "service_id": 17,
+        "inbr_account_id": "...", "overall_rating": 5,
+        "rating_detail": { "service": 5, "attitude": 4 },
+        "review_content": "服務很好，準時到府", "media": ["https://.../photo1.jpg"],
+        "status": "01", "is_deleted": false, "cre_time": "...", "upd_time": "..."
+      }
+    ]
+    ```
+    每筆欄位對應 `mms_order_review` 完整內容（`ReviewOut`），**不是**
+    公開評價牆的精簡格式，包含 `inbr_account_id`、`order_no` 等內部欄位。
+
+    **說明**
+
+    給 APP 端查看某個服務項目全部評價用（範圍限定單一服務項目，
+    不含同商家的其他服務）。
+
+    api_server 沒有「直接依 service_id 查完整評價」的端點——現成的
+    `GET /services/{service_id}/reviews` 是公開評價牆，回傳精簡過的
+    `PublicReviewOut`（刻意排除 `inbr_account_id`/`order_no`/
+    `service_vendor_id`/`status` 等欄位，避免對外洩漏身分/內部資訊）。
+    這裡改用以下組合取得完整欄位：
+    1. `GET /services/{service_id}` 查出該服務所屬的 `service_vendor_id`
+    2. `GET /vendors/{service_vendor_id}/reviews?service_id={service_id}`
+       （帶 service_id 篩選）並自動分頁抓取到底
+
+    ⚠️ 安全提醒：此端點回傳完整評價內容（含 `inbr_account_id`、
+    `order_no`），目前平台無身分驗證機制，任何知道 `service_id` 的人
+    都能呼叫並取得評價者身分關聯資訊。若前端只是要做「服務評價瀏覽」
+    這種公開頁面，建議改呼叫 api_server 現成的公開評價牆端點
+    `GET /services/{service_id}/reviews`（回傳去識別化的 `PublicReviewOut`），
+    而不是這支。
+    """
+    service_resp = await db_api.get(f"/services/{service_id}")
+    service_vendor_id = service_resp.json()["service_vendor_id"]
+
+    reviews = await db_api.get_all_items(
+        f"/vendors/{service_vendor_id}/reviews", params={"service_id": service_id}
+    )
+    return reviews
+
+
+@router.get("/users/{inbr_account_id}")
+async def get_member_profile(
+    inbr_account_id: str,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得會員個人資訊
+
+    **輸入**
+    - `inbr_account_id` (path, uuid): 會員 UUID，登入時取得
+
+    **輸出**
+    ```json
+    {
+      "id": "019c0464-2d01-73f0-9f9b-d1392fdb941a",
+      "account": "user01@example.com",
+      "contact_name": "王小明",
+      "contact_mobile": "0912345678",
+      "contact_email": "user01@example.com",
+      "is_2fa_enabled": "0",
+      "last_login_time": "...",
+      "is_enable": "1",
+      "is_deleted": "0",
+      "upd_time": "...",
+      "cre_time": "..."
+    }
+    ```
+
+    **說明**
+
+    取得會員的帳號與聯絡資訊，供 APP 端「個人資料」頁面顯示。
+    個資欄位（姓名、手機、Email）已由 api_server 解密後回傳明文。
+    """
+    resp = await db_api.get(f"/users/{inbr_account_id}")
+    return resp.json()
 
 
 @router.patch("/users/{inbr_account_id}")

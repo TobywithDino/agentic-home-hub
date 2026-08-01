@@ -1,8 +1,8 @@
 # API Reference — DB Access API Server
 
-本文件是 `api_server/` 的完整 API 規格參考，記錄全部 78 個業務端點的路徑、方法、請求/回應型別，並標註每個端點對應圖面需求（`AI指示文件/DB_API_1.jpg`、`DB_API_2.jpg`）或設計來源。
+本文件是 `api_server/` 的完整 API 規格參考，記錄全部 94 個業務端點的路徑、方法、請求/回應型別，並標註每個端點對應圖面需求（`AI指示文件/DB_API_1.jpg`、`DB_API_2.jpg`）或設計來源。
 
-> **本文件已於 2026-07-31 對照實際程式碼（`api_server/app/routers/*.py` 的路由定義 + FastAPI 自動生成的 `/openapi.json`）逐條核對，路徑與方法 100% 一致，無遺漏或錯誤。**
+> **本文件已於 2026-08-01 對照實際程式碼（`api_server/app/routers/*.py` 的路由定義，含新增的 `routers/summaries.py`）逐條核對，路徑與方法 100% 一致，無遺漏或錯誤。**
 
 - 所有查詢類（GET 列表）端點皆支援 `limit`（預設 20，1~200）/ `offset`（預設 0）分頁查詢參數，回應包裝在 `PagedResponse` 中。
 - 所有刪除皆為軟刪除（更新 `is_deleted` 欄位），例外：`cms_homepage_service_vendor`、`cms_homepage_service`、`pms_form_group`、`pms_form_topic` 這 4 張表在 DDL 中沒有 `is_deleted` 欄位，其刪除為實體 DELETE（詳見各節註記）。
@@ -19,7 +19,9 @@
 - [F. 表單結構](#f-表單結構-pms_form-系列)
 - [G. 諮詢單回饋](#g-諮詢單回饋-pms_form_feedback)
 - [H. 訂單](#h-訂單-mms_order_record)
-- [I. 系統](#i-系統)
+- [I. 訂單評價](#i-訂單評價-mms_order_review)
+- [I2. 評價AI摘要](#i2-評價ai摘要-mms_review_summary_service-mms_review_summary_vendor)
+- [J. 系統](#j-系統)
 - [圖面功能覆蓋檢查](#圖面功能覆蓋檢查12項全部可實現)
 
 ---
@@ -139,12 +141,15 @@
 | `name` | `str` | 服務項目名稱 |
 | `img_url` | `str?` | 圖片網址 |
 | `description` | `str?` | 說明（可含HTML） |
+| `form_id` | `int?` | 此服務項目對應的諮詢表單ID（對應`pms_form.id`，新增功能）。`null`代表尚未設定專屬表單。一個表單可被多個服務項目共用（多個service的`form_id`可指向同一張表單） |
 
 `type` 代碼對照：`1`一般居家清潔 / `2`家電清洗 / `3`包裹寄送 / `6`餐廳訂位 / `9`美食外送 / `10`水電修繕 / `11`商城購物
 
-**`ServiceCreate`**：`id`、`service_vendor_id`、`type`、`name`（皆必填）、`img_url`/`description`（可選）
+**`ServiceCreate`**：`id`、`service_vendor_id`、`type`、`name`（皆必填）、`img_url`/`description`/`form_id`（可選）
 
-**`ServiceUpdate`**：全部欄位皆可選
+**`ServiceUpdate`**：全部欄位皆可選（含`form_id`）
+
+**`form_id` 補充說明**：此欄位是為了解決「一個服務項目要對應到哪張諮詢表單」的查詢需求而新增（原設計只有`pms_form.service_vendor_id`，無法從單一service_id直接查到對應表單）。與`pms_form`本身的B端/客服/轉訂單流程等通用表單（透過`service_vendor_id` + `GET /vendors/{id}/forms`查詢）互不影響，那些表單不需要、也不會被指定到某個`service_id`。api_server不驗證`form_id`是否真實存在於`pms_form`（延續全庫鬆耦合、無實體FK的設計慣例）。
 
 ---
 
@@ -540,7 +545,128 @@
 
 ---
 
-## I. 系統
+## I. 訂單評價（mms_order_review）
+
+新增功能，圖面未涵蓋。每筆訂單至多一筆評價：`mms_order_review.record_id` 直接沿用對應 `mms_order_record.record_id` 的值（1:0..1對應，本表無獨立序列），資料庫層面天然保證「一筆訂單最多一筆評價」，重複提交會因 PK 衝突被路由層轉為 409。詳細設計討論見 `部署手冊.md`。
+
+| # | Method / Path | 說明 | Request Body | 回傳型別 | 來源 |
+|---|---|---|---|---|---|
+| 79 | `POST /orders/{record_id}/review` | 提交訂單評價 | `ReviewCreate` | `ReviewOut`（201） | 新增功能 |
+| 80 | `GET /orders/{record_id}/review` | 查看單筆訂單的評價（404代表尚未評價） | - | `ReviewOut` | 新增功能 |
+| 81 | `PATCH /users/{inbr_account_id}/orders/{record_id}/review` | 評價者本人修改評價內容 | `ReviewUpdate` | `ReviewOut` | 新增功能 |
+| 82 | `GET /users/{inbr_account_id}/reviews` | 會員查看自己送出過的所有評價(分頁) | - | `PagedResponse<ReviewOut>` | 新增功能 |
+| 83 | `GET /vendors/{service_vendor_id}/reviews` | 供應商查看自己收到的所有評價(分頁,可用`service_id` query參數篩選) | - | `PagedResponse<ReviewOut>` | 新增功能 |
+| 84 | `GET /vendors/{service_vendor_id}/rating-summary` | 評分聚合：評價數與平均分(可用`service_id` query參數細分) | - | `RatingSummaryOut` | 新增功能 |
+| 85 | `GET /services/{service_id}/reviews` | **公開評價牆，無需身分驗證即可呼叫**，給潛在顧客看該服務項目的評價 | - | `PagedResponse<PublicReviewOut>` | 新增功能 |
+
+**業務規則**：
+
+- `POST /orders/{record_id}/review`：要求該訂單 `order_status='80'`（已完成），否則回409；`payload.inbr_account_id` 須與訂單的 `inbr_account_id` 一致，否則回403（此比對方式依現有架構的信任模型，因整個API目前無身分驗證中介層，非本功能新增的安全坑）；成功後同步將對應訂單的 `comment_status` 更新為 `'02'`（已評價）。
+- `PATCH /users/{inbr_account_id}/orders/{record_id}/review`：路徑中的 `inbr_account_id` 須與該筆評價的 `inbr_account_id` 一致，否則回403。
+- `GET /services/{service_id}/reviews`：是全部端點中**唯一不需身分驗證即可呼叫**的端點，語意上開放給未登入的訪客/潛在顧客瀏覽。回傳的 `PublicReviewOut` 刻意排除 `inbr_account_id`/`order_no`/`service_vendor_id`/`status`/`is_deleted` 等身分或內部狀態欄位。
+
+**`ReviewCreate`**：`inbr_account_id: uuid`（必填）、`overall_rating: int`（必填,1~5,超出範圍回422）、`rating_detail: json?`、`review_content: str?`、`media: json?`（皆可選）
+
+**`ReviewUpdate`**：`overall_rating`/`rating_detail`/`review_content`/`media` 皆可選,只更新有提供的欄位（`overall_rating`若提供仍受1~5範圍驗證）
+
+**`ReviewOut`**
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `record_id` | `int` | 對應訂單ID（PK，與`mms_order_record.record_id`共用值，非自增） |
+| `order_no` | `str` | 訂單編號（冗餘自mms_order_record） |
+| `service_vendor_id` / `service_id` | `int` / `int` | 服務提供商/服務ID（冗餘欄位） |
+| `inbr_account_id` | `uuid` | 提交評價的會員編號 |
+| `overall_rating` | `int` | 整體評分，1~5星 |
+| `rating_detail` | `json?` | 多維度評分，例如`{"attitude":5,"cleanliness":5}` |
+| `review_content` | `str?` | 文字評價內容 |
+| `media` | `json?` | 附加照片/影片網址，JSON陣列格式 |
+| `status` | `str` | 評價狀態，`01`已送出（建立時預設值） |
+| `is_deleted` | `bool` | 是否刪除 |
+| `cre_id` | `uuid` | 新增者編號（通常等於`inbr_account_id`） |
+| `cre_time` / `upd_time` | `datetime` / `datetime` | 新增/異動時間 |
+| `upd_id` | `uuid?` | 異動者編號 |
+
+**`PublicReviewOut`**（`GET /services/{service_id}/reviews` 專用，公開評價牆縮減欄位版本）
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `record_id` | `int` | 對應訂單ID |
+| `overall_rating` | `int` | 整體評分 |
+| `rating_detail` | `json?` | 多維度評分 |
+| `review_content` | `str?` | 文字評價內容 |
+| `media` | `json?` | 附加照片/影片網址 |
+| `cre_time` | `datetime` | 評價時間 |
+
+> 註：不含 `inbr_account_id`/`order_no`/`service_vendor_id`/`service_id`/`status`/`is_deleted`，刻意排除評價者身分與訂單/內部狀態資訊。
+
+**`RatingSummaryOut`**
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `service_vendor_id` | `int` | 服務提供商ID |
+| `service_id` | `int?` | 服務ID（未帶`service_id` query參數時為`null`，代表統計該廠商全部服務） |
+| `review_count` | `int` | 符合條件的評價總數（`is_deleted=false`） |
+| `average_rating` | `float?` | 平均評分，四捨五入至小數點後2位；無任何評價時為`null` |
+
+---
+
+## I2. 評價AI摘要（mms_review_summary_service / mms_review_summary_vendor）
+
+新增功能，圖面未涵蓋。彙整 `mms_order_review` 的內容生成AI摘要，供使用者/供應商在不同顆粒度查看。本 server 只負責「讀取摘要」與「寫入/更新摘要結果」，**不呼叫 LLM**——實際呼叫 AI 模型產生摘要內容的流程屬於更上層服務（例如 bff_server 或獨立排程），這裡的 `PUT` 端點是給該流程寫回生成結果用。
+
+兩張表皆為**覆寫式快取**設計：同一個 `service_id` / `service_vendor_id` 只保留最新1筆摘要，重新生成時直接覆蓋，不留歷史版本。
+
+| # | Method / Path | 說明 | Request Body | 回傳型別 | 來源 |
+|---|---|---|---|---|---|
+| 86 | `GET /services/{service_id}/review-summary` | 查看服務項目的評價AI摘要（使用者/供應商共用） | - | `ServiceReviewSummaryOut` | 新增功能 |
+| 87 | `PUT /services/{service_id}/review-summary` | 寫入/覆蓋服務項目摘要（供AI生成流程呼叫） | `ServiceReviewSummaryUpsert` | `ServiceReviewSummaryOut`（200更新/201新建） | 新增功能 |
+| 88 | `PATCH /services/{service_id}/review-summary/status` | 僅更新生成狀態（標記生成中/失敗，不需整包內容） | `ReviewSummaryStatusUpdate` | `ServiceReviewSummaryOut` | 新增功能 |
+| 89 | `DELETE /services/{service_id}/review-summary` | 軟刪除摘要 | - | 無內容（204） | 新增功能 |
+| 90 | `GET /vendors/{service_vendor_id}/review-summaries` | 供應商查看名下所有服務的摘要清單(分頁) | - | `PagedResponse<ServiceReviewSummaryOut>` | 新增功能 |
+| 91 | `GET /vendors/{service_vendor_id}/review-summary` | 查看供應商整合總摘要 | - | `VendorReviewSummaryOut` | 新增功能 |
+| 92 | `PUT /vendors/{service_vendor_id}/review-summary` | 寫入/覆蓋供應商總摘要 | `VendorReviewSummaryUpsert` | `VendorReviewSummaryOut`（200更新/201新建） | 新增功能 |
+| 93 | `PATCH /vendors/{service_vendor_id}/review-summary/status` | 僅更新生成狀態 | `ReviewSummaryStatusUpdate` | `VendorReviewSummaryOut` | 新增功能 |
+| 94 | `DELETE /vendors/{service_vendor_id}/review-summary` | 軟刪除摘要 | - | 無內容（204） | 新增功能 |
+
+**業務規則**：
+
+- `GET .../review-summary`：找不到資料（尚未生成過，或已被軟刪除）回 404，語意同 `GET /orders/{record_id}/review` 的「尚未評價」模式。
+- `PUT .../review-summary`：完整覆寫語意。若 key 不存在則新建（回201），存在則整包覆蓋（回200），並將 `is_deleted` 重設為 `false`。呼叫端（生成流程）應在呼叫前自行查詢當下最新的評價聚合值（筆數/平均分/最新時間），連同 AI 生成結果一起送出；`generate_time` 由伺服器端填入當前時間，不接受呼叫端指定。
+- `PATCH .../review-summary/status`：只更新 `generate_status`/`error_message`。若目標 key 尚無記錄，會自動建立一筆殼記錄（其餘欄位皆為 `null`），讓生成流程可以「先標記01生成中」再非同步寫入完整內容，不用等 LLM 回應才第一次寫資料。建立服務項目摘要的殼記錄時，`service_vendor_id` 由 `cms_homepage_service` 查得（值相等關聯，非FK）；若 `service_id` 本身不存在於 `cms_homepage_service`，回 404。供應商摘要的殼記錄無此限制（`service_vendor_id` 本身即為路徑參數，不驗證是否存在於 `cms_homepage_service_vendor`）。
+- `DELETE`：軟刪除（`is_deleted=true`），之後 `GET` 視為 404，但不清空欄位內容，方便日後除錯或恢復。
+- 因無身分驗證中介層，`PUT`/`PATCH` 的 `cre_id`/`upd_id` 皆填入系統識別碼 `SYSTEM_ACTOR_ID`（`00000000-0000-7000-8000-000000000000`），無法追蹤是哪個服務觸發的生成，比照 `catalog.py` 管理端 CRUD 的既有慣例。
+
+**`ServiceReviewSummaryUpsert`**：`service_vendor_id: int`（必填）、`summary_content: str?`、`summary_highlights: json?`、`sentiment_stats: json?`、`source_review_count: int`（必填，預設0）、`source_avg_rating: float?`、`latest_review_cre_time: datetime?`、`ai_model: str?`、`generate_status: str`（必填，`00`/`01`/`02`/`03`）、`error_message: str?`
+
+**`ServiceReviewSummaryOut`**
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `service_id` | `int` | 服務項目ID（PK，與`cms_homepage_service.id`共用值） |
+| `service_vendor_id` | `int` | 服務提供商ID，冗餘欄位 |
+| `summary_content` | `str?` | AI生成的摘要文字 |
+| `summary_highlights` | `json?` | 結構化重點，例如`{"pros":[...],"cons":[...]}` |
+| `sentiment_stats` | `json?` | 情感分布統計，例如`{"positive":12,"neutral":3,"negative":2}` |
+| `source_review_count` | `int` | 本次摘要納入計算的評價筆數 |
+| `source_avg_rating` | `float?` | 納入計算的評價平均分數快取 |
+| `latest_review_cre_time` | `datetime?` | 納入計算的最新一筆評價建立時間 |
+| `ai_model` | `str?` | 生成本筆摘要所用的AI模型名稱/版本 |
+| `generate_status` | `str` | 生成狀態，`00`待生成/`01`生成中/`02`已完成/`03`失敗 |
+| `generate_time` | `datetime?` | 本次摘要生成完成時間 |
+| `error_message` | `str?` | 生成失敗時的錯誤訊息 |
+| `is_deleted` | `bool` | 是否刪除 |
+| `cre_id` / `cre_time` | `uuid` / `datetime` | 新增者/新增時間 |
+| `upd_id` / `upd_time` | `uuid?` / `datetime` | 異動者/異動時間 |
+| `is_stale` | `bool` | **計算欄位（非資料庫欄位）**：即時比對 `mms_order_review` 目前的 `COUNT(*)`/`MAX(cre_time)` 是否超過本筆記錄的 `source_review_count`/`latest_review_cre_time`，`true` 代表有新評價尚未納入摘要，建議觸發重新生成 |
+
+**`VendorReviewSummaryUpsert`** / **`VendorReviewSummaryOut`**：結構同上，差異：無 `service_vendor_id` 冗餘欄位（PK本身即為 `service_vendor_id`）；多一個 `service_breakdown: json?` 欄位（各服務項目的簡易統計快取，JSON陣列，例如`[{"service_id":1,"review_count":10,"avg_rating":4.5}]`，避免前端需另外逐一查詢 `ServiceReviewSummaryOut`）；`source_review_count`/`source_avg_rating` 為跨全部服務項目的加總/平均；`is_stale` 比對範圍是該供應商名下全部服務的 `mms_order_review`。
+
+**`ReviewSummaryStatusUpdate`**：`generate_status: str`（必填，`00`/`01`/`02`/`03`）、`error_message: str?`（可選，通常搭配`generate_status='03'`失敗時填寫）
+
+---
+
+## J. 系統
 
 | # | Method / Path | 說明 | 回傳型別 |
 |---|---|---|---|
@@ -567,6 +693,8 @@
 | 圖2 | 設定商家資訊 | #14（商家屬性）+ #39（聯絡方式） |
 | 圖2 | 登入 | #36 |
 | - | 獲取廠商表單內容（新增功能，圖面未涵蓋） | #78 |
+| - | 訂單評價（新增功能，圖面未涵蓋） | #79~#85 |
+| - | 評價AI摘要（新增功能，圖面未涵蓋） | #86~#94 |
 
 ---
 
@@ -588,3 +716,6 @@
 
 - **2026-07-31**：由 `DB_API_table.md` 重新命名為 `API_Reference.md`，並對照實際 `api_server` 程式碼與 `/openapi.json` 逐條核對（77個端點路徑/方法100%一致），新增所有端點的 Request Body / 回傳型別完整說明。
 - **2026-07-31**：新增 `GET /vendors/{service_vendor_id}/forms/full`（#78，見 `forms.py`），補上圖面未涵蓋的「獲取廠商表單內容」功能：輸入 service_vendor_id，回傳該廠商所有已審核且啟用表單的完整結構，避免前端需自行迴圈呼叫 #41+#43。
+- **2026-08-01**：新增第 I 章「訂單評價」（`mms_order_review`，#79~#85，見 `routers/reviews.py`），支援「每筆訂單使用者可提交一份評價」的需求。新增評價會同步更新對應訂單的 `comment_status`。新增 `GET /services/{service_id}/reviews`（#85）作為公開評價牆，是全部端點中唯一不需身分驗證即可呼叫的端點，回傳縮減欄位的 `PublicReviewOut`。原第I章「系統」順延為第J章。端點總數由78增至85，已對照實際 `/openapi.json` 核對一致。
+- **2026-08-01**：新增第 I2 章「評價AI摘要」（`mms_review_summary_service`/`mms_review_summary_vendor`，#86~#94，見 `routers/summaries.py`），支援使用者查看單一服務項目的評價AI摘要、供應商查看各服務摘要與整合總摘要的需求。本 server 只負責讀寫這兩張覆寫式快取表，不呼叫LLM。`PATCH .../status` 會在記錄不存在時自動建立殼記錄；`GET` 回應含即時計算欄位 `is_stale` 判斷摘要是否過期。端點總數由85增至94，已用本機 Docker PostgreSQL + uvicorn 實測全部9個端點行為正確。
+- **2026-08-01**：`cms_homepage_service` 新增 `form_id: int?` 欄位（`ServiceCreate`/`ServiceUpdate`/`ServiceOut`），解決「一個服務項目要對應到哪張諮詢表單」查詢缺口（原設計只能反向查`pms_form.service_vendor_id`，無法從單一`service_id`直接取得對應表單）。不影響既有端點路徑，端點數量不變（仍94個），已用本機 Docker PostgreSQL + uvicorn 實測 GET/POST/PATCH/DELETE 皆正確讀寫此欄位。種子資料同步更新：`service_vendor_id=1`名下4個服務項目（洗衣機清洗/冷氣清洗/專業清潔/計時家事服務）皆設為`form_id=9`（既有測試表單），示範多個服務項目共用同一張表單，其餘4個服務項目維持`NULL`。
