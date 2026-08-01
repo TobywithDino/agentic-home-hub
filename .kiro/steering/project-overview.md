@@ -102,3 +102,16 @@ bash deploy.sh
 - RDS 密碼明文放在 EC2 的 `.env` 檔案
 
 詳見 `Database/部署手冊.md` 第 8 章「上線前安全檢查清單」。
+
+## Steering 自我維護規則
+
+當你的改動涉及以下任何一項時，**必須**同步更新本 steering 文件（`.kiro/steering/project-overview.md`）：
+
+- 新增、刪除或重新命名 API 端點（`app_api.py` / `merchant_api.py`）
+- 調整目錄結構或新增重要檔案
+- 架構層級變動（例如新增 service layer、新增 middleware）
+- 部署流程或 AWS 環境資訊變更（IP、port、service name）
+- 資料庫 table / 欄位結構變更（反映在「資料庫核心概念」段落）
+- 開發慣例調整（docstring 格式、型別風格等）
+
+更新時保持文件簡潔，只修改受影響的段落，不要整份重寫。
