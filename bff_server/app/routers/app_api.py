@@ -20,31 +20,62 @@ router = APIRouter(prefix="/app-api", tags=["APP 端"])
 @router.get("/service-types/{service_type}/vendors")
 async def find_vendors_by_service(
     service_type: str,
+    labels: str | None = None,
     db_api: DbApiClient = Depends(get_db_api_client),
 ):
-    """尋找特定服務的廠商：回傳所有提供此服務類型 (service_type) 的廠商。
+    """尋找特定服務的廠商：回傳所有提供此服務類型 (service_type) 的廠商，
+    可選透過 label 做篩選。
 
-    對應圖1「尋找特定服務的廠商」。api_server 本身沒有「依服務類型找廠商」的
-    現成端點，這裡組合兩支既有端點自己拼出來，沒有改動 Database/：
+    對應圖1「尋找特定服務的廠商」。
+
+    Query Parameters:
+        service_type: 服務類型代碼（對應 cms_homepage_service.type）
+        labels: (可選) 以逗號分隔的 label_id 清單，例如 "3,5"。
+                只回傳「其下至少有一個 service 同時擁有所有指定 label」的廠商。
+
+    流程：
     1. api_server #16 (`GET /services?type=...`) 找出符合此服務類型的所有 service
-    2. 取出這些 service 的 service_vendor_id 並去重
-    3. 逐一呼叫 api_server #12 (`GET /service-vendors/{id}`) 組成廠商清單
-
-    注意：#16 單次最多回傳 200 筆 service（api_server 分頁上限），
-    若未來某服務類型的 service 數量超過 200，需要改成分頁迴圈抓取。
+    2. 若有指定 labels，查每個 service 的 label 清單，過濾掉不符合的 service
+    3. 取出篩選後 service 的 service_vendor_id 並去重
+    4. 逐一呼叫 api_server #12 (`GET /service-vendors/{id}`) 組成廠商清單
+    5. 在每個 vendor 上附加 matched_labels 資訊
     """
+    # Step 1: 取得符合 service_type 的所有 service
     services_resp = await db_api.get("/services", params={"type": service_type, "limit": 200})
     services = services_resp.json()["items"]
 
+    # 解析前端傳入的 label 篩選條件
+    required_label_ids: set[int] = set()
+    if labels:
+        required_label_ids = {int(lid.strip()) for lid in labels.split(",") if lid.strip()}
+
+    # Step 2: 若有指定 labels，逐一查 service 的 label，篩選符合的 service
+    if required_label_ids:
+        filtered_services = []
+        for service in services:
+            service_id = service["id"]
+            labels_resp = await db_api.get(
+                f"/services/{service_id}/labels", params={"limit": 200}
+            )
+            service_label_ids = {item["label_id"] for item in labels_resp.json()["items"]}
+            # 該 service 必須同時擁有所有指定的 label
+            if required_label_ids.issubset(service_label_ids):
+                filtered_services.append(service)
+        services = filtered_services
+
+    # Step 3: 取出 vendor_id 並去重
     vendor_ids = list(dict.fromkeys(s["service_vendor_id"] for s in services))
 
+    # Step 4: 查詢每個 vendor 的完整資訊
     vendors = []
     for vendor_id in vendor_ids:
         vendor_resp = await db_api.get(f"/service-vendors/{vendor_id}")
-        vendors.append(vendor_resp.json())
+        vendor_data = vendor_resp.json()
 
-    # TODO: label filter（DB 欄位還沒新增，先保留不做）
-    # TODO: 排序等前端需要的邏輯放這裡
+        # Step 5: 附加此 vendor 在篩選結果中對應的 service 及其 labels
+        vendor_services = [s for s in services if s["service_vendor_id"] == vendor_id]
+        vendor_data["matched_services"] = vendor_services
+        vendors.append(vendor_data)
 
     return vendors
 
