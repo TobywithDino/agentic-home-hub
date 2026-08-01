@@ -15,6 +15,80 @@ from app.review_utils import attach_review_to_order, attach_reviews_to_orders
 router = APIRouter(prefix="/merchant-api", tags=["商家後台"])
 
 
+@router.post("/services", status_code=201)
+async def create_service(
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """商家新增一個服務項目
+
+    **輸入**（JSON body）
+    ```json
+    {
+      "service_vendor_id": 1,
+      "type": "10",
+      "name": "水電修繕-管線更換",
+      "img_url": "https://...(可選)",
+      "description": "服務項目描述(可選)",
+      "form_id": null
+    }
+    ```
+    - `service_vendor_id`（必填）：所屬服務商 ID
+    - `type`（必填）：服務類型代碼。
+      1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物
+    - `name`（必填）：服務項目名稱（最長 100 字元）
+    - `img_url`（可選）：服務項目圖片 URL
+    - `description`（可選）：服務項目說明
+    - `form_id`（可選）：對應的諮詢表單 ID，未設定時可省略或傳 null
+    - `id`（可選）：服務項目 ID。**不傳則自動分配**（取全平台目前最大 id + 1）；
+      若自行指定且已存在則回 409
+
+    **輸出**：建立後的完整服務項目物件（含實際使用的 `id`）
+
+    **說明**
+
+    商家後台新增一個服務項目。
+
+    `cms_homepage_service.id` 在資料庫是 `int4`（非 `serial4`），沒有自增序列，
+    api_server 的 `POST /services` 要求呼叫端自行指定 `id`。這裡在 BFF 層補上
+    自動分配：先查詢全平台現有服務項目取最大 id，加 1 作為新 id，前端不需要
+    自己想編號也不會撞號。
+
+    ⚠️ 自動分配是「查詢最大值 + 1」，非資料庫層級的序列，高併發同時新增
+    有極小機率算出同一個 id 而其中一筆收到 409。demo 階段可接受，
+    正式環境應改為資料庫層自增（把欄位改成 `serial4`）。
+    """
+    body = dict(payload)
+
+    if "id" not in body:
+        existing = await db_api.get_all_items("/services")
+        body["id"] = max((s["id"] for s in existing), default=0) + 1
+
+    resp = await db_api.post("/services", json=body)
+    return resp.json()
+
+
+@router.delete("/services/{service_id}", status_code=204)
+async def delete_service(
+    service_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """商家刪除一個服務項目
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+
+    **輸出**：無內容（HTTP 204）
+
+    **說明**
+
+    刪除指定的服務項目（實體刪除，此表無 is_deleted 欄位）。
+    刪除後該 service 底下的 label 關聯（`service_label`）不會自動清除
+    （資料庫無實體 FK），但已不影響查詢（查不到 service 就不會再被列出）。
+    """
+    await db_api.delete(f"/services/{service_id}")
+
+
 @router.get("/services")
 async def list_all_services(
     db_api: DbApiClient = Depends(get_db_api_client),
@@ -622,7 +696,7 @@ async def create_form_with_content(
 
     # 把此表單的 form_id 寫回對應的 service（必填）
     service_id = payload["service_id"]
-    await db_api.patch(f"/services/{service_id}", json={"form_id": form["id"]})
+    await db_api.patch(f"/services/{service_id}", json={"form_id": form_id})
 
     return form
 
@@ -785,6 +859,62 @@ async def update_order(
     resp = await db_api.patch(f"/vendors/{service_vendor_id}/orders/{record_id}", json=payload)
     order = resp.json()
     return await attach_review_to_order(order, db_api)
+
+
+@router.get("/vendors/{service_vendor_id}")
+async def get_merchant_profile(
+    service_vendor_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得商家資訊（商家屬性 + 管理帳號清單）
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID，登入時取得
+
+    **輸出**
+    ```json
+    {
+      "vendor_profile": {
+        "id": 1,
+        "name": "服務商名稱",
+        "description": "服務商描述"
+      },
+      "accounts": [
+        {
+          "id": "019fb652-df72-7992-989e-f456194edf8c",
+          "service_vendor_id": 1,
+          "account": "vendor01@example.com",
+          "contact_name": "王小明",
+          "contact_mobile": "0912345678",
+          "contact_email": "vendor01@example.com",
+          "is_2fa_enabled": "0",
+          "last_login_time": "...",
+          "is_enable": "1",
+          "cre_time": "...", "upd_time": "..."
+        }
+      ]
+    }
+    ```
+    - `vendor_profile`：商家基本屬性
+    - `accounts`：該商家底下的管理帳號清單（不含密碼）。帳號的 `id` 即為
+      呼叫 `PATCH /vendors/{id}` 更新聯絡方式時要帶的 `account_id`
+
+    **說明**
+
+    商家後台「設定」頁面載入時呼叫，取得目前的商家屬性與管理帳號資訊
+    供畫面顯示，使用者修改後再呼叫 `PATCH /vendors/{service_vendor_id}` 儲存。
+
+    對應 `update_merchant_profile` 的讀取版本，組合兩支 api_server 端點：
+    `GET /service-vendors/{id}`（商家屬性）+ `GET /vendors/{id}/accounts`（管理帳號）。
+    個資欄位（聯絡人姓名/手機/Email）已由 api_server 解密後回傳明文。
+
+    ⚠️ 安全提醒：回傳內容包含管理帳號的個資明文，目前平台無身分驗證機制，
+    任何知道 `service_vendor_id` 的人都能呼叫並取得這些資訊。
+    """
+    vendor_resp = await db_api.get(f"/service-vendors/{service_vendor_id}")
+    accounts = await db_api.get_all_items(f"/vendors/{service_vendor_id}/accounts")
+
+    return {"vendor_profile": vendor_resp.json(), "accounts": accounts}
 
 
 @router.patch("/vendors/{service_vendor_id}")
