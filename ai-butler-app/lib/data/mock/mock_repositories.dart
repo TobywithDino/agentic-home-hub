@@ -230,3 +230,97 @@ class MockOrderRepository implements OrderRepository {
     );
   }
 }
+
+class MockReviewRepository implements ReviewRepository {
+  final List<OrderReview> _reviews = [];
+  int _sequence = 0;
+
+  @override
+  Future<OrderReview> createReview({
+    required int recordId,
+    required ReviewDraft draft,
+  }) async {
+    await _simulateLatency();
+    _sequence++;
+    final review = OrderReview(
+      recordId: recordId,
+      orderNo:
+          'ORD${DateTime.now().year}${_sequence.toString().padLeft(4, '0')}',
+      serviceVendorId: 1,
+      serviceId: 17,
+      inbrAccountId: draft.inbrAccountId,
+      overallRating: draft.overallRating,
+      ratingDetail: draft.ratingDetail,
+      reviewContent: draft.reviewContent,
+      media: draft.media,
+      status: '01',
+      creTime: DateTime.now(),
+    );
+    _reviews.add(review);
+    return review;
+  }
+
+  @override
+  Future<OrderReview> updateReview({
+    required int recordId,
+    required ReviewDraft draft,
+  }) async {
+    await _simulateLatency();
+    final idx = _reviews.indexWhere((r) => r.recordId == recordId);
+    final updated = OrderReview(
+      recordId: recordId,
+      orderNo: idx >= 0 ? _reviews[idx].orderNo : 'ORD0001',
+      serviceVendorId: idx >= 0 ? _reviews[idx].serviceVendorId : 1,
+      serviceId: idx >= 0 ? _reviews[idx].serviceId : 17,
+      inbrAccountId: draft.inbrAccountId,
+      overallRating: draft.overallRating,
+      ratingDetail: draft.ratingDetail,
+      reviewContent: draft.reviewContent,
+      media: draft.media,
+      status: '01',
+      creTime: idx >= 0 ? _reviews[idx].creTime : DateTime.now(),
+      updTime: DateTime.now(),
+    );
+    if (idx >= 0) {
+      _reviews[idx] = updated;
+    } else {
+      _reviews.add(updated);
+    }
+    return updated;
+  }
+
+  @override
+  Future<List<OrderReview>> fetchServiceReviews(int serviceId) async {
+    await _simulateLatency();
+    // 回傳預設的 mock 評價資料
+    return [
+      OrderReview(
+        recordId: 1,
+        orderNo: 'ORD20260101001',
+        serviceVendorId: 1,
+        serviceId: serviceId,
+        inbrAccountId: '0198a3f1-6e42-7d3a-9c1b-4f8e2a7d5c60',
+        overallRating: 5,
+        ratingDetail: const {'service': 5, 'attitude': 5},
+        reviewContent: '服務很好，準時到府，環境整理得很乾淨！',
+        media: const [],
+        status: '01',
+        creTime: DateTime(2026, 6, 15),
+      ),
+      OrderReview(
+        recordId: 2,
+        orderNo: 'ORD20260201002',
+        serviceVendorId: 1,
+        serviceId: serviceId,
+        inbrAccountId: '0198a3f1-6e42-7d3a-9c1b-000000000001',
+        overallRating: 4,
+        ratingDetail: const {'service': 4, 'attitude': 4},
+        reviewContent: '整體不錯，但時間稍有延遲。',
+        media: const [],
+        status: '01',
+        creTime: DateTime(2026, 7, 2),
+      ),
+      ..._reviews.where((r) => r.serviceId == serviceId),
+    ];
+  }
+}
