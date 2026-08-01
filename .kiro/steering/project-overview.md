@@ -17,6 +17,8 @@ agentic-home-hub/
 │   ├── patch_test_pii.ps1    一次性腳本：補寫種子測試帳號（user01~04/vendor01~03）的PII明文，
 │   │                         用法見AWS操作手冊.md「5.1」（需先設定PII_ENCRYPTION_KEY_B64並重啟aiwave-api）
 │   ├── database/             DDL（*.sql）+ 種子資料（*.json）+ 建置腳本
+│   │   └── schema.dbml       資料庫ER圖原始碼（DBML），配套schema.svg/.png，取代舊newDBstruct.jpg
+│   │                         用 `npx @softwaretechnik/dbml-renderer -i schema.dbml -o schema.svg` 重新產圖
 │   └── api_server/           FastAPI，直接操作 PostgreSQL，跑在 EC2 8000 埠
 │       └── app/routers/      geo / catalog / accounts / forms / feedbacks / orders / reviews / summaries
 └── bff_server/               我方負責：BFF（Backend For Frontend）
