@@ -12,7 +12,7 @@
 
 ## 目前狀態
 
-`app_api.py`（APP 端，8 支）與 `merchant_api.py`（商家後台，12 支）
+`app_api.py`（APP 端，11 支）與 `merchant_api.py`（商家後台，15 支）
 對應 `Database/AI指示文件/DB_API_1.jpg` 與 `DB_API_2.jpg` 兩張圖的每一個框框，
 另加上 label 管理、表單 CRUD、訂單評價等後續新增功能。
 
@@ -41,8 +41,8 @@ app/
   main.py          FastAPI 應用程式入口
   review_utils.py  共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
   routers/
-    app_api.py       APP 前端呼叫的 8 支 API
-    merchant_api.py  商家後台呼叫的 12 支 API
+    app_api.py       APP 前端呼叫的 11 支 API
+    merchant_api.py  商家後台呼叫的 15 支 API
 ```
 
 ## 端點對應表
@@ -52,11 +52,14 @@ app/
 | 功能 | 路徑 | 說明 |
 |---|---|---|
 | 尋找廠商 | `GET /service-types/{service_type}/vendors` | 依服務類型+標籤篩選 |
+| 廠商的服務項目 | `GET /vendors/{service_vendor_id}/services` | 可用 service_type 篩選，回傳含 form_id |
+| 表單完整內容 | `GET /forms/{form_id}/full` | 含題組/題目/選項，供填單頁渲染 |
 | 建立 feedback | `POST /feedbacks` | 使用者填完表單後送出 |
 | 查看訂單總覽 | `GET /users/{id}/orders-overview` | 未處理 feedback + 全部訂單（含 review） |
 | 提交評價 | `POST /orders/{record_id}/review` | 訂單完成後提交評價 |
 | 修改評價 | `PATCH /users/{id}/orders/{record_id}/review` | 修改自己提交過的評價 |
 | 查看服務評價 | `GET /services/{service_id}/reviews` | 依服務項目查全部評價（完整內容） |
+| 取得會員資訊 | `GET /users/{id}` | 個人資料頁顯示用 |
 | 設定會員資訊 | `PATCH /users/{id}` | 更新聯絡方式/密碼 |
 | 登入 | `POST /auth/login` | 回傳 inbr_account_id |
 
@@ -64,6 +67,7 @@ app/
 
 | 功能 | 路徑 | 說明 |
 |---|---|---|
+| 廠商的服務項目 | `GET /vendors/{id}/services` | 可用 service_type 篩選 |
 | 查看 feedback | `GET /vendors/{id}/feedbacks` | 商家收到的諮詢回饋單 |
 | 更新 feedback 狀態 | `PATCH /feedbacks/{feedback_no}/status` | 已讀/處理進度 |
 | 查詢標籤勾選狀態 | `GET /services/{service_id}/labels` | 全部標籤 + checked 狀態 |
@@ -71,8 +75,8 @@ app/
 | 查看全部評價 | `GET /vendors/{id}/reviews` | 一次回傳全部（不分頁） |
 | 表單清單 | `GET /vendors/{id}/forms` | 僅主檔 |
 | 表單完整內容 | `GET /forms/{form_id}/full` | 含題組/題目/選項 |
-| 更新表單（差異比對） | `PATCH /forms/{form_id}` | 帶 id=更新、不帶=新增、沒出現=刪除 |
-| 建立表單（巢狀） | `POST /forms` | 一次送完整結構 |
+| 更新表單（差異比對） | `PATCH /forms/{form_id}` | 帶 id=更新、不帶=新增、沒出現=刪除，必填 service_id |
+| 建立表單（巢狀） | `POST /forms` | 一次送完整結構，必填 service_id |
 | 建立訂單 | `POST /orders` | 新增訂單 |
 | 查看訂單 | `GET /vendors/{id}/orders` | 含 review 欄位 |
 | 更新訂單 | `PATCH /vendors/{id}/orders/{record_id}` | 狀態/金額/時間 |

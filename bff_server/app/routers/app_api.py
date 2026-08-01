@@ -112,16 +112,20 @@ async def list_vendor_services(
         "type": "10",
         "name": "水電修繕-一般維修",
         "img_url": "https://...",
-        "description": "服務項目描述"
+        "description": "服務項目描述",
+        "form_id": 9
       }
     ]
     ```
+    `form_id` 是該服務項目對應的諮詢表單 ID，前端可直接拿此值
+    呼叫 `GET /app-api/forms/{form_id}/full` 取得表單完整結構供使用者填寫。
 
     **說明**
 
     前端在找到廠商後，點進廠商詳情頁時呼叫此 API 取得該廠商的服務項目。
     可透過 `service_type` 參數篩選特定類型（例如只看水電修繕），
-    不傳則回傳全部。
+    不傳則回傳全部。每個服務項目帶有 `form_id`，前端可據此導向對應的
+    諮詢表單填寫頁面。
     """
     params: dict = {"service_vendor_id": service_vendor_id, "limit": 200}
     if service_type is not None:

@@ -15,6 +15,48 @@ from app.review_utils import attach_review_to_order, attach_reviews_to_orders
 router = APIRouter(prefix="/merchant-api", tags=["商家後台"])
 
 
+@router.get("/vendors/{service_vendor_id}/services")
+async def list_vendor_services(
+    service_vendor_id: int,
+    service_type: str | None = None,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得該商家提供的服務項目清單（可依服務類型篩選）
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID
+    - `service_type` (query, string, 可選): 服務類型代碼。
+      1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物。
+      不傳則回傳該 vendor 名下全部服務項目。
+
+    **輸出**：服務項目陣列
+    ```json
+    [
+      {
+        "id": 17,
+        "service_vendor_id": 1,
+        "type": "10",
+        "name": "水電修繕-一般維修",
+        "img_url": "https://...",
+        "description": "服務項目描述",
+        "form_id": 9
+      }
+    ]
+    ```
+    `form_id` 是該服務項目對應的諮詢表單 ID。
+
+    **說明**
+
+    商家後台用來查看/管理自己名下的服務項目清單。
+    可透過 `service_type` 參數篩選特定類型，不傳則回傳全部。
+    """
+    params: dict = {"service_vendor_id": service_vendor_id, "limit": 200}
+    if service_type is not None:
+        params["type"] = service_type
+    resp = await db_api.get("/services", params=params)
+    return resp.json()["items"]
+
+
 @router.get("/vendors/{service_vendor_id}/feedbacks")
 async def list_feedbacks(
     service_vendor_id: int,
@@ -301,6 +343,8 @@ async def update_form(
       更新該題目的 `form_group_id`）；選項目前**不支援**搬到別的題目
       （若要搬，等同刪除原選項 + 在新題目下新增一筆）
     - 本端點不處理題目輔助圖片（`pms_topic_media`），既有圖片不會被異動
+    - `service_id`（必填）：此表單綁定的服務項目 ID，更新成功後會自動把該
+      service 的 `form_id` 欄位更新為此表單的 id
 
     **輸出**：更新後的完整巢狀表單結構，格式同 `GET /forms/{form_id}/full`
 
@@ -391,7 +435,13 @@ async def update_form(
                     await db_api.post(f"/form-topics/{topic_id}/options", json=option_body)
 
     resp = await db_api.get(f"/forms/{form_id}/full")
-    return resp.json()
+    result = resp.json()
+
+    # 把此表單的 form_id 寫回對應的 service（必填）
+    service_id = payload["service_id"]
+    await db_api.patch(f"/services/{service_id}", json={"form_id": form_id})
+
+    return result
 
 
 @router.post("/forms", status_code=201)
@@ -432,11 +482,14 @@ async def create_form_with_content(
             }
           ]
         }
-      ]
+      ],
+      "service_id": 17
     }
     ```
     `groups`、`groups[].topics`、`topics[].options` 皆為陣列，可依需要放多個。
     題目若非單選/複選題（例如簡答、備註類型）可省略 `options`。
+    `service_id`（必填）：此表單要綁定到哪個服務項目，建立成功後會自動
+    把該 service 的 `form_id` 欄位更新為此表單的 id。
 
     **輸出**：建立後的完整巢狀表單物件
     ```json
@@ -504,6 +557,11 @@ async def create_form_with_content(
         groups_out.append(group)
 
     form["groups"] = groups_out
+
+    # 把此表單的 form_id 寫回對應的 service（必填）
+    service_id = payload["service_id"]
+    await db_api.patch(f"/services/{service_id}", json={"form_id": form["id"]})
+
     return form
 
 
