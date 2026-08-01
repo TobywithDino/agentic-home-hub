@@ -26,7 +26,7 @@ agentic-home-hub/
         ├── review_utils.py   共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
         └── routers/
             ├── app_api.py       APP 前端呼叫的 11 支 API
-            └── merchant_api.py  商家後台呼叫的 15 支 API
+            └── merchant_api.py  商家後台呼叫的 17 支 API
 ```
 
 ## 架構
