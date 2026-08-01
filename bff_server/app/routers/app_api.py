@@ -7,12 +7,71 @@ APP 不直接打隊友的 DB Access API（Database/api_server），而是打這�
 前端需要、但不適合放在純資料存取層的邏輯。
 """
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
+from app.agent_client import ButlerAgentClient, get_agent_client
 from app.client import DbApiClient
 from app.deps import get_db_api_client
 from app.review_utils import attach_reviews_to_orders
 
 router = APIRouter(prefix="/app-api", tags=["APP 端"])
+
+
+class ButlerChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    inbr_account_id: str = Field(..., min_length=1, max_length=128)
+    session_id: str | None = None
+
+
+@router.post("/butler/chat")
+async def butler_chat(
+    payload: ButlerChatRequest,
+    agent: ButlerAgentClient = Depends(get_agent_client),
+):
+    """AI 管家對話（SSE 串流）
+
+    **輸入**（request body）
+    - `message` (string): 使用者這次說的話
+    - `inbr_account_id` (string): 會員 UUID。跨 session 的長期記憶就是靠這個值區分使用者
+    - `session_id` (string, 可選): 同一個聊天室請固定傳同一個值以延續對話。
+      未提供或長度不足 33 字元時，本層會自動產生一個並回在 `X-Session-Id` 標頭
+
+    **輸出**：`text/event-stream`，每筆事件為一行 `data: {json}`
+    ```json
+    {"type": "text_delta", "text": "逐字輸出的片段"}
+    {"type": "tool_start", "name": "find_service_vendors"}
+    {"type": "ui", "component": "vendor_list", "payload": { "vendors": [] }}
+    {"type": "draft", "draft_id": "...", "summary": "...", "payload": {}}
+    {"type": "done"}
+    {"type": "error", "message": "錯誤說明"}
+    ```
+
+    **說明**
+    - AgentCore Runtime 只接受 SigV4(IAM) 驗證，前端拿不到憑證，
+      所以由本層用 EC2 instance role 代為呼叫再轉發 SSE。
+    - AI 管家**沒有寫入權限**。`draft` 事件只是草稿，真正送出仍要由 APP
+      呼叫既有的 `POST /app-api/feedbacks`。
+    - 需要環境變數 `AGENTCORE_RUNTIME_ARN`；未設定時會回一筆 `error` 事件。
+    """
+    session_id = agent.normalize_session_id(payload.session_id)
+
+    return StreamingResponse(
+        agent.stream(
+            message=payload.message,
+            actor_id=payload.inbr_account_id,
+            session_id=session_id,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # 前面若有 nginx 之類的反向代理，少了這行 SSE 會被緩衝住，
+            # 前端要等整輪結束才一次收到全部文字，逐字輸出的效果就沒了。
+            "X-Accel-Buffering": "no",
+            "X-Session-Id": session_id,
+        },
+    )
 
 
 @router.get("/service-types/{service_type}/vendors")
