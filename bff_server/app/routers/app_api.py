@@ -6,7 +6,7 @@ APP 不直接打隊友的 DB Access API（Database/api_server），而是打這�
 這一層再去呼叫 api_server 拿資料，中間做排序、label filter、資料組裝等
 前端需要、但不適合放在純資料存取層的邏輯。
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -329,6 +329,68 @@ async def get_form_full(
     （所有題組、題目、選項、輔助圖片、地區限制），供前端渲染填單頁面。
     直接轉發 api_server 現成的組裝端點，未做額外處理。
     """
+    resp = await db_api.get(f"/forms/{form_id}/full")
+    return resp.json()
+
+
+@router.get("/services/{service_id}/form/full")
+async def get_service_form_full(
+    service_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某服務項目對應表單的完整巢狀內容
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID（`cms_homepage_service.id`）
+
+    **輸出**：完整表單結構，同 `GET /forms/{form_id}/full`
+    ```json
+    {
+      "form": { "id": 22, "service_vendor_id": 1, "type": "1", "name": "海底撈月", "...": "..." },
+      "groups": [ { "id": 20, "form_id": 22, "name": "訂位資訊", "sort": 0 } ],
+      "topics": [
+        {
+          "id": 30, "form_id": 22, "form_group_id": 20, "type": "3",
+          "title": "希望時段", "is_required": "1", "sort": 0,
+          "options": [ { "id": 40, "option_name": "18:00" } ],
+          "media": [], "county_district_relations": []
+        }
+      ]
+    }
+    ```
+
+    **錯誤**
+    - `404`：服務項目不存在，或它的 `form_id` 是 `NULL`（尚未設定專屬表單）
+
+    **說明**
+
+    給 AI 管家（`agent_service`）用：它需要表單的**題目結構**才能決定要問
+    使用者什麼，而不是把每種服務的流程寫死在程式裡。
+
+    走 `cms_homepage_service.form_id` 這條關聯，而不是用
+    `pms_form.service_vendor_id` 反查商家的表單。原因是後者在實際資料上
+    會拿到錯的表單：同一個商家名下可能有十幾張表單（含測試用的、
+    給別的服務用的），沒有可靠依據挑出「這個服務要用哪一張」。
+    `form_id` 就是為了補這個查詢缺口而加的欄位。
+
+    api_server 沒有「service → 表單完整內容」的單一端點，所以這裡組兩步：
+    1. `GET /services/{service_id}` 取得 `form_id`
+    2. `GET /forms/{form_id}/full` 取完整巢狀內容
+    """
+    service = (await db_api.get(f"/services/{service_id}")).json()
+
+    form_id = service.get("form_id")
+    if form_id is None:
+        # 明確區分「服務不存在」與「服務還沒設定表單」，
+        # 讓呼叫端（AI 管家）能對使用者講清楚而不是含糊帶過。
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"服務項目 {service_id}（{service.get('name')}）尚未設定對應表單"
+                "（cms_homepage_service.form_id 為 NULL），無法填單。"
+            ),
+        )
+
     resp = await db_api.get(f"/forms/{form_id}/full")
     return resp.json()
 

@@ -28,7 +28,7 @@
         },
         {
           "name": "BFF_BASE_URL",
-          "value": ""
+          "value": "http://52.10.163.115:8100"
         }
       ]
     }

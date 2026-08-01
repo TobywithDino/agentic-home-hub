@@ -19,13 +19,20 @@ final butlerAiServiceProvider = Provider<ButlerAiService>((ref) {
 
   return switch (config.aiSource) {
     DataSource.mock => MockButlerAiService(),
-    DataSource.remote => HttpButlerAiService(
-        baseUrl: config.effectiveBaseUrl,
-        getAccountId: () => _readAccountId(ref),
-        fallback: MockButlerAiService(),
-      ),
+    DataSource.remote => _createRemote(ref, config.effectiveBaseUrl),
   };
 });
+
+HttpButlerAiService _createRemote(Ref ref, String baseUrl) {
+  final service = HttpButlerAiService(
+    baseUrl: baseUrl,
+    getAccountId: () => _readAccountId(ref),
+    fallback: MockButlerAiService(),
+  );
+  // provider 被回收時關掉底層 http client，否則連線會留著
+  ref.onDispose(service.dispose);
+  return service;
+}
 
 /// 從本機儲存讀取已登入的 account id。
 ///
