@@ -501,6 +501,7 @@ def _upsert_vendor_summary(
     body = {
         "summary_content": summary_content,
         "summary_highlights": {
+            "vendor_name": vendor_name,
             "summary_points": summary_points,
             "suggestions": suggestions,
         },
