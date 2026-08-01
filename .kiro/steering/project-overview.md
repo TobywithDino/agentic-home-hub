@@ -13,10 +13,10 @@ agentic-home-hub/
 ├── Database/                隊友負責：資料庫 + DB Access API
 │   ├── 部署手冊.md            本機建置 + AWS 遷移完整手冊
 │   ├── AWS操作手冊.md         目前 AWS 環境連線/操作指南（EC2 IP、SSM 連線方式等）
-│   ├── API_Reference.md      api_server 78 個端點完整規格
+│   ├── API_Reference.md      api_server 85 個端點完整規格
 │   ├── database/             DDL（*.sql）+ 種子資料（*.json）+ 建置腳本
 │   └── api_server/           FastAPI，直接操作 PostgreSQL，跑在 EC2 8000 埠
-│       └── app/routers/      geo / catalog / accounts / forms / feedbacks / orders
+│       └── app/routers/      geo / catalog / accounts / forms / feedbacks / orders / reviews
 └── bff_server/               我方負責：BFF（Backend For Frontend）
     ├── README.md             架構說明 + 端點對應表
     ├── deploy.sh             一鍵部署到 EC2 的腳本
@@ -83,10 +83,11 @@ bash deploy.sh
 - **label / service_label**：標籤主檔 + 服務項目與標籤的多對多關聯表
 - **user_accounts / vendor_accounts**：會員 / 商家後台登入帳號（密碼 bcrypt 雜湊，個資 AES-256-GCM 加密存 `bytea`，同時有明文欄位對應的 `_hash` 欄位可查詢比對）
 - **mms_order_record**：訂單/訂位統一紀錄表
+- **mms_order_review**：訂單評價，`record_id` 直接沿用對應 `mms_order_record.record_id`（1:0..1，無獨立序列），一筆訂單至多一筆評價由 PK 天然保證。新增評價會同步把訂單的 `comment_status` 改成 `02`。`GET /services/{service_id}/reviews` 是全平台唯一不需身分驗證即可呼叫的公開端點（評價牆）
 - **pms_form 系列**：諮詢表單結構（group → topic → option/media）
 - **pms_form_feedback**：使用者填寫表單後的回饋記錄
 
-完整規格見 `Database/API_Reference.md` 和 `Database/database/*.sql` 的欄位註解（COMMENT ON COLUMN）。
+完整規格見 `Database/API_Reference.md` 和 `Database/database/*.sql` 的欄位註解（COMMENT ON COLUMN）。整體16張表的關係圖與逐欄位種子資料覆蓋狀況見 `Database/database/README.md`。
 
 ## bff_server 開發慣例
 
