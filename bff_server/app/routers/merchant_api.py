@@ -722,22 +722,30 @@ async def create_order(
       "order_type": "01=服務訂單 02=訂位 03=預約 04=其他 05=商品訂單 06=訂餐",
       "order_status": "初始狀態碼,見下方說明",
       "order_time": "ISO8601時間",
-      "deposit_amount": 0, "original_amount": 0, "discount_amount": 0,
+      "deposit_amount": 0, "original_amount": 2500, "discount_amount": 0,
       "shipping_fee_amount": 0, "final_amount": 0,
-      "vendor_data": {}, "order_items": {},
+      "vendor_data": { "feedback_content": { "...": "原始諮詢表單填答內容" } },
+      "order_items": {},
       "remark": "備註",
       "cre_id": "建立者UUID", "upd_id": "異動者UUID"
     }
     ```
     `order_status` 初始值：服務訂單用 `11`(待訂金)；訂位/預約/商品/訂餐用 `01`(待付款)。
 
-    **輸出**：建立後的完整訂單物件（含系統產生的 `record_id`），
-    附加 `review: null`（新建訂單不可能已有評價）
+    - `original_amount`：商家「接單時輸入的估價金額」寫在這裡（`mms_order_record.original_amount`）。
+    - `vendor_data`：商家「諮詢單轉訂單」時，把原始 `pms_form_feedback.feedback_content`
+      整包塞進來即可，讓商家之後檢視訂單時能看到當初顧客填寫的完整表單內容。
+      此欄位為 `jsonb`，結構不限，整包轉發不會被過濾或裁切。
+
+    **輸出**：建立後的完整訂單物件（含系統產生的 `record_id`、原樣保留的
+    `original_amount`、`vendor_data`），附加 `review: null`（新建訂單不可能已有評價）
 
     **說明**
 
     商家後台建立一筆新訂單。個資欄位傳入明文即可，系統會自動用
-    AES-256-GCM 加密存儲。
+    AES-256-GCM 加密存儲。payload 是 `dict` 直接轉發給 api_server，
+    不會過濾任何欄位；`original_amount`、`vendor_data` 皆為 api_server
+    `OrderCreate` 既有欄位，不需額外調整即可使用。
     """
     resp = await db_api.post("/orders", json=payload)
     order = resp.json()
@@ -934,13 +942,16 @@ async def list_orders(
 
     **輸出**：訂單物件陣列，每筆包含 `record_id`、`order_no`、
     `inbr_account_id`、`order_type`、`order_status`、`order_time`、
-    `final_amount`、`order_items` 等欄位，並附加 `review` 欄位——
-    有評價過的訂單是完整評價物件，沒評價過則是 `null`
+    `original_amount`（估價金額）、`final_amount`、`order_items`、
+    `vendor_data`（建單時存入的原始 feedback 內容）等欄位，並附加
+    `review` 欄位——有評價過的訂單是完整評價物件，沒評價過則是 `null`
 
     **說明**
 
     取得屬於該服務商的所有訂單，用於商家後台的訂單管理頁面。
-    訂單評價（`mms_order_review`）一併查出並附加到對應訂單上，
+    api_server 回傳的每筆訂單已含完整欄位（包括 `original_amount`、
+    `vendor_data`），這裡原樣轉發不做欄位過濾。訂單評價
+    （`mms_order_review`）一併查出並附加到對應訂單上，
     前端不需要再另外呼叫評價 API。
     """
     orders_resp = await db_api.get(
