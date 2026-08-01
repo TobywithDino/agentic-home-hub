@@ -617,10 +617,9 @@ async def list_orders(
         f"/vendors/{service_vendor_id}/orders",
         params={"order_status": order_status} if order_status is not None else None,
     )
-    orders = orders_resp.json()
+    orders = orders_resp.json()["items"]
 
-    reviews_resp = await db_api.get(f"/vendors/{service_vendor_id}/reviews", params={"limit": 200})
-    reviews = reviews_resp.json()["items"]
+    reviews = await db_api.get_all_items(f"/vendors/{service_vendor_id}/reviews")
 
     return attach_reviews_to_orders(orders, reviews)
 
