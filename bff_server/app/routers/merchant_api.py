@@ -15,6 +15,68 @@ from app.review_utils import attach_review_to_order, attach_reviews_to_orders
 router = APIRouter(prefix="/merchant-api", tags=["商家後台"])
 
 
+@router.get("/services")
+async def list_all_services(
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得全平台所有服務項目清單
+
+    **輸入**：無
+
+    **輸出**：服務項目陣列（不分頁，一次回傳全部）
+    ```json
+    [
+      {
+        "id": 17,
+        "service_vendor_id": 1,
+        "type": "10",
+        "name": "水電修繕-一般維修",
+        "img_url": "https://...",
+        "description": "...",
+        "form_id": 9
+      }
+    ]
+    ```
+
+    **說明**
+
+    供 AI summary Lambda 等內部服務批次取得全部服務項目 id 與名稱，
+    避免直接呼叫 api_server port 8000。
+    自動處理分頁，一次回傳完整清單。
+    """
+    items = await db_api.get_all_items("/services")
+    return items
+
+
+@router.get("/vendors")
+async def list_all_vendors(
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得全平台所有服務商清單
+
+    **輸入**：無
+
+    **輸出**：服務商陣列（不分頁，一次回傳全部）
+    ```json
+    [
+      {
+        "id": 1,
+        "name": "服務商名稱",
+        "description": "服務商描述"
+      }
+    ]
+    ```
+
+    **說明**
+
+    供 AI summary Lambda 等內部服務批次取得全部商家 id 與名稱，
+    避免直接呼叫 api_server port 8000。
+    自動處理分頁，一次回傳完整清單。
+    """
+    items = await db_api.get_all_items("/service-vendors")
+    return items
+
+
 @router.get("/vendors/{service_vendor_id}/services")
 async def list_vendor_services(
     service_vendor_id: int,
