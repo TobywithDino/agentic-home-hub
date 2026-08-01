@@ -141,12 +141,15 @@
 | `name` | `str` | 服務項目名稱 |
 | `img_url` | `str?` | 圖片網址 |
 | `description` | `str?` | 說明（可含HTML） |
+| `form_id` | `int?` | 此服務項目對應的諮詢表單ID（對應`pms_form.id`，新增功能）。`null`代表尚未設定專屬表單。一個表單可被多個服務項目共用（多個service的`form_id`可指向同一張表單） |
 
 `type` 代碼對照：`1`一般居家清潔 / `2`家電清洗 / `3`包裹寄送 / `6`餐廳訂位 / `9`美食外送 / `10`水電修繕 / `11`商城購物
 
-**`ServiceCreate`**：`id`、`service_vendor_id`、`type`、`name`（皆必填）、`img_url`/`description`（可選）
+**`ServiceCreate`**：`id`、`service_vendor_id`、`type`、`name`（皆必填）、`img_url`/`description`/`form_id`（可選）
 
-**`ServiceUpdate`**：全部欄位皆可選
+**`ServiceUpdate`**：全部欄位皆可選（含`form_id`）
+
+**`form_id` 補充說明**：此欄位是為了解決「一個服務項目要對應到哪張諮詢表單」的查詢需求而新增（原設計只有`pms_form.service_vendor_id`，無法從單一service_id直接查到對應表單）。與`pms_form`本身的B端/客服/轉訂單流程等通用表單（透過`service_vendor_id` + `GET /vendors/{id}/forms`查詢）互不影響，那些表單不需要、也不會被指定到某個`service_id`。api_server不驗證`form_id`是否真實存在於`pms_form`（延續全庫鬆耦合、無實體FK的設計慣例）。
 
 ---
 
@@ -715,3 +718,4 @@
 - **2026-07-31**：新增 `GET /vendors/{service_vendor_id}/forms/full`（#78，見 `forms.py`），補上圖面未涵蓋的「獲取廠商表單內容」功能：輸入 service_vendor_id，回傳該廠商所有已審核且啟用表單的完整結構，避免前端需自行迴圈呼叫 #41+#43。
 - **2026-08-01**：新增第 I 章「訂單評價」（`mms_order_review`，#79~#85，見 `routers/reviews.py`），支援「每筆訂單使用者可提交一份評價」的需求。新增評價會同步更新對應訂單的 `comment_status`。新增 `GET /services/{service_id}/reviews`（#85）作為公開評價牆，是全部端點中唯一不需身分驗證即可呼叫的端點，回傳縮減欄位的 `PublicReviewOut`。原第I章「系統」順延為第J章。端點總數由78增至85，已對照實際 `/openapi.json` 核對一致。
 - **2026-08-01**：新增第 I2 章「評價AI摘要」（`mms_review_summary_service`/`mms_review_summary_vendor`，#86~#94，見 `routers/summaries.py`），支援使用者查看單一服務項目的評價AI摘要、供應商查看各服務摘要與整合總摘要的需求。本 server 只負責讀寫這兩張覆寫式快取表，不呼叫LLM。`PATCH .../status` 會在記錄不存在時自動建立殼記錄；`GET` 回應含即時計算欄位 `is_stale` 判斷摘要是否過期。端點總數由85增至94，已用本機 Docker PostgreSQL + uvicorn 實測全部9個端點行為正確。
+- **2026-08-01**：`cms_homepage_service` 新增 `form_id: int?` 欄位（`ServiceCreate`/`ServiceUpdate`/`ServiceOut`），解決「一個服務項目要對應到哪張諮詢表單」查詢缺口（原設計只能反向查`pms_form.service_vendor_id`，無法從單一`service_id`直接取得對應表單）。不影響既有端點路徑，端點數量不變（仍94個），已用本機 Docker PostgreSQL + uvicorn 實測 GET/POST/PATCH/DELETE 皆正確讀寫此欄位。種子資料同步更新：`service_vendor_id=1`名下4個服務項目（洗衣機清洗/冷氣清洗/專業清潔/計時家事服務）皆設為`form_id=9`（既有測試表單），示範多個服務項目共用同一張表單，其餘4個服務項目維持`NULL`。

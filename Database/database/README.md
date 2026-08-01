@@ -37,7 +37,8 @@ pms_form（表單主檔）──form_id──┬── pms_form_group（題組�
                                 ├── pms_form_topic（題目）──topic_id──┬── pms_topic_media（輔助圖片）
                                 │                                      ├── pms_topic_option（選項）
                                 │                                      └── pms_topic_county_district_relation（縣市行政區對應）
-                                └── pms_form_feedback（表單回饋，使用者填單後的紀錄）
+                                ├── pms_form_feedback（表單回饋，使用者填單後的紀錄）
+                                └── cms_homepage_service.form_id（新增，nullable，指定該服務項目對應哪張表單，多個service可指向同一form_id）
 
 mms_order_record（訂單主檔）──record_id── mms_order_review（訂單評價，1:0..1，PK共用）
                                               │
@@ -51,6 +52,7 @@ mms_order_record（訂單主檔）──record_id── mms_order_review（訂�
 - `user_accounts.id` == `mms_order_record.inbr_account_id` == `pms_form_feedback.inbr_account_id` == `mms_order_review.inbr_account_id`
 - `cms_homepage_service_vendor.id` == `cms_homepage_service.service_vendor_id` == `vendor_accounts.service_vendor_id` == `pms_form.service_vendor_id` == `mms_order_record.service_vendor_id` == `mms_order_review.service_vendor_id` == `mms_review_summary_service.service_vendor_id` == `mms_review_summary_vendor.service_vendor_id`
 - `cms_homepage_service.id` == `service_label.service_id` == `mms_order_record.service_id` == `pms_form_feedback.service_id` == `mms_order_review.service_id` == `mms_review_summary_service.service_id`
+- `pms_form.id` == `cms_homepage_service.form_id`（新增，nullable，多個service可共用同一form_id）
 
 ## 2. 各表詳細說明與種子資料覆蓋率
 
@@ -95,6 +97,9 @@ mms_order_record（訂單主檔）──record_id── mms_order_review（訂�
 | `name` | 服務項目名稱 | ✅ 8/8 |
 | `img_url` | 圖片網址 | ✅ 8/8 |
 | `description` | 說明（可含HTML） | ⚠️ 5/8（3筆為空字串） |
+| `form_id` | 對應諮詢表單ID（`pms_form.id`，新增功能，解決「查service要找對應form」的需求） | ⚠️ 4/8（`service_vendor_id=1`名下4筆:id 1/2/4/5皆指向`form_id=9`,示範多service共用同一張表單;其餘4筆為`NULL`） |
+
+> `form_id` 為 nullable，`NULL`代表尚未設定專屬表單。多個service可指向同一個form_id（共用表單，種子資料已示範此情境）。與`pms_form`本身供B端/客服/轉訂單流程使用的通用表單無關，那些表單不透過此欄位查詢，仍走`pms_form.service_vendor_id` + `GET /vendors/{id}/forms`。
 
 ### C. 標籤（`account_and_label.sql`）
 

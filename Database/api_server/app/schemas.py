@@ -114,6 +114,7 @@ class ServiceCreate(BaseModel):
     name: str = Field(max_length=100)
     img_url: str | None = Field(default=None, max_length=500)
     description: str | None = None
+    form_id: int | None = None
 
 
 class ServiceUpdate(BaseModel):
@@ -122,6 +123,7 @@ class ServiceUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=100)
     img_url: str | None = Field(default=None, max_length=500)
     description: str | None = None
+    form_id: int | None = None
 
 
 class ServiceOut(BaseModel):
@@ -132,6 +134,7 @@ class ServiceOut(BaseModel):
     name: str
     img_url: str | None
     description: str | None
+    form_id: int | None
 
 
 # ---------------------------------------------------------------------------

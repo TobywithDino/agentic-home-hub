@@ -76,6 +76,7 @@ class CmsHomepageService(Base):
     name: Mapped[str] = mapped_column(String(100))
     img_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    form_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 # ---------------------------------------------------------------------------
