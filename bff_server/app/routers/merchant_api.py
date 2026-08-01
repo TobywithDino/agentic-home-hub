@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 
 from app.client import DbApiClient
 from app.deps import get_db_api_client
+from app.review_utils import attach_review_to_order, attach_reviews_to_orders
 
 router = APIRouter(prefix="/merchant-api", tags=["商家後台"])
 
@@ -163,6 +164,119 @@ async def set_service_labels(
     ]
 
 
+@router.post("/forms", status_code=201)
+async def create_form_with_content(
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """一次性建立表單及其巢狀內容（題組 → 題目 → 選項）
+
+    **輸入**（JSON body）
+    ```json
+    {
+      "form": {
+        "service_vendor_id": 1,
+        "type": "1=C端(無需評估) 2=C端(需評估) 3=B端 4=轉訂單流程 5=客服",
+        "sub_type": "1=一般表單 2=估價表單",
+        "name": "居家清潔諮詢表",
+        "intro_content": "服務介紹(html,可選)",
+        "notice_content": "注意事項(html,可選)",
+        "terms_content": "服務條款(html,可選)",
+        "is_enable": "1"
+      },
+      "groups": [
+        {
+          "name": "基本資料",
+          "sort": 0,
+          "topics": [
+            {
+              "type": "3=單選題 4=複選題 1=簡答題 2=詳答題 5=地區選單 6=照片 7=備註 8=聯絡資料 9=日期 10=聯絡資料(不含地址)",
+              "title": "您需要哪種清潔服務？",
+              "remark": "題目說明(可選)",
+              "is_required": "1=必填 0=非必填",
+              "sort": 0,
+              "options": [
+                { "option_name": "居家清潔", "unit_price": 1000, "sort": 0 },
+                { "option_name": "家電清洗", "unit_price": 1500, "sort": 1 }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+    ```
+    `groups`、`groups[].topics`、`topics[].options` 皆為陣列，可依需要放多個。
+    題目若非單選/複選題（例如簡答、備註類型）可省略 `options`。
+
+    **輸出**：建立後的完整巢狀表單物件
+    ```json
+    {
+      "id": 10, "service_vendor_id": 1, "name": "居家清潔諮詢表", "review_status": "0", "...": "...",
+      "groups": [
+        {
+          "id": 20, "name": "基本資料", "...": "...",
+          "topics": [
+            {
+              "id": 30, "title": "您需要哪種清潔服務？", "...": "...",
+              "options": [ { "id": 40, "option_name": "居家清潔", "...": "..." } ]
+            }
+          ]
+        }
+      ]
+    }
+    ```
+
+    **說明**
+
+    給商家後台「建立新表單」頁面用，一次送出完整表單結構（題組、題目、選項），
+    不需要前端自己依序呼叫 4 層 API。內部依序呼叫 api_server 的
+    `POST /forms` → `POST /forms/{id}/groups` → `POST /forms/{id}/topics`
+    （自動帶入所屬 `form_group_id`）→ `POST /form-topics/{id}/options`，
+    再把各層回傳結果組裝成巢狀結構回傳。新建表單的 `review_status` 一律為
+    `0`（未審核），需另外呼叫審核端點才能上線。
+
+    ⚠️ api_server 沒有跨資源的交易機制，若中途某一層建立失敗（例如某個
+    題目建立失敗），前面已成功建立的表單/題組不會自動回滾，需要另外
+    刪除清理。這是巢狀組裝 API 目前的已知限制。
+    """
+    form_resp = await db_api.post("/forms", json=payload.get("form", {}))
+    form = form_resp.json()
+    form_id = form["id"]
+
+    groups_out = []
+    for group_payload in payload.get("groups", []):
+        topics_payload = group_payload.get("topics", [])
+        group_body = {k: v for k, v in group_payload.items() if k != "topics"}
+
+        group_resp = await db_api.post(f"/forms/{form_id}/groups", json=group_body)
+        group = group_resp.json()
+        group_id = group["id"]
+
+        topics_out = []
+        for topic_payload in topics_payload:
+            options_payload = topic_payload.get("options", [])
+            topic_body = {k: v for k, v in topic_payload.items() if k != "options"}
+            topic_body["form_group_id"] = group_id
+
+            topic_resp = await db_api.post(f"/forms/{form_id}/topics", json=topic_body)
+            topic = topic_resp.json()
+            topic_id = topic["id"]
+
+            options_out = []
+            for option_payload in options_payload:
+                option_resp = await db_api.post(f"/form-topics/{topic_id}/options", json=option_payload)
+                options_out.append(option_resp.json())
+
+            topic["options"] = options_out
+            topics_out.append(topic)
+
+        group["topics"] = topics_out
+        groups_out.append(group)
+
+    form["groups"] = groups_out
+    return form
+
+
 @router.post("/orders", status_code=201)
 async def create_order(
     payload: dict,
@@ -193,7 +307,8 @@ async def create_order(
     ```
     `order_status` 初始值：服務訂單用 `11`(待訂金)；訂位/預約/商品/訂餐用 `01`(待付款)。
 
-    **輸出**：建立後的完整訂單物件（含系統產生的 `record_id`）
+    **輸出**：建立後的完整訂單物件（含系統產生的 `record_id`），
+    附加 `review: null`（新建訂單不可能已有評價）
 
     **說明**
 
@@ -201,7 +316,9 @@ async def create_order(
     AES-256-GCM 加密存儲。
     """
     resp = await db_api.post("/orders", json=payload)
-    return resp.json()
+    order = resp.json()
+    order["review"] = None
+    return order
 
 
 @router.get("/vendors/{service_vendor_id}/orders")
@@ -220,19 +337,25 @@ async def list_orders(
 
     **輸出**：訂單物件陣列，每筆包含 `record_id`、`order_no`、
     `inbr_account_id`、`order_type`、`order_status`、`order_time`、
-    `final_amount`、`order_items` 等欄位。
+    `final_amount`、`order_items` 等欄位，並附加 `review` 欄位——
+    有評價過的訂單是完整評價物件，沒評價過則是 `null`
 
     **說明**
 
     取得屬於該服務商的所有訂單，用於商家後台的訂單管理頁面。
+    訂單評價（`mms_order_review`）一併查出並附加到對應訂單上，
+    前端不需要再另外呼叫評價 API。
     """
-    resp = await db_api.get(
+    orders_resp = await db_api.get(
         f"/vendors/{service_vendor_id}/orders",
         params={"order_status": order_status} if order_status is not None else None,
     )
-    items = resp.json()
+    orders = orders_resp.json()
 
-    return items
+    reviews_resp = await db_api.get(f"/vendors/{service_vendor_id}/reviews", params={"limit": 200})
+    reviews = reviews_resp.json()["items"]
+
+    return attach_reviews_to_orders(orders, reviews)
 
 
 @router.patch("/vendors/{service_vendor_id}/orders/{record_id}")
@@ -263,16 +386,19 @@ async def update_order(
     }
     ```
 
-    **輸出**：更新後的完整訂單物件
+    **輸出**：更新後的完整訂單物件，附加 `review` 欄位——
+    有評價過則是完整評價物件，沒評價過則是 `null`
 
     **說明**
 
     常見場景：確認訂金（`order_status` 11→12 + `deposit_time`）、
     報價（改 13 + `quote_no`）、完成（改 80 + `complete_time`）、
-    取消（改 90 + `cancel_time` + `cancel_reason`）。
+    取消（改 90 + `cancel_time` + `cancel_reason`）。訂單完成後可能已有評價
+    （`mms_order_review`），這裡會一併查出並附加到回傳的訂單物件上。
     """
     resp = await db_api.patch(f"/vendors/{service_vendor_id}/orders/{record_id}", json=payload)
-    return resp.json()
+    order = resp.json()
+    return await attach_review_to_order(order, db_api)
 
 
 @router.patch("/vendors/{service_vendor_id}")

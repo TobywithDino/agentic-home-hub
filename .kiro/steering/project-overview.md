@@ -21,11 +21,12 @@ agentic-home-hub/
     ├── README.md             架構說明 + 端點對應表
     ├── deploy.sh             一鍵部署到 EC2 的腳本
     └── app/
-        ├── client.py         封裝呼叫 Database/api_server 的 httpx client
+        ├── client.py         封裝呼叫 Database/api_server 的 httpx client（含 get_optional，把 404 當正常空值）
         ├── config.py         環境變數設定
+        ├── review_utils.py   共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
         └── routers/
-            ├── app_api.py       APP 前端呼叫的 5 支 API
-            └── merchant_api.py  商家後台呼叫的 7 支 API
+            ├── app_api.py       APP 前端呼叫的 7 支 API
+            └── merchant_api.py  商家後台呼叫的 8 支 API
 ```
 
 ## 架構
@@ -83,8 +84,8 @@ bash deploy.sh
 - **label / service_label**：標籤主檔 + 服務項目與標籤的多對多關聯表
 - **user_accounts / vendor_accounts**：會員 / 商家後台登入帳號（密碼 bcrypt 雜湊，個資 AES-256-GCM 加密存 `bytea`，同時有明文欄位對應的 `_hash` 欄位可查詢比對）
 - **mms_order_record**：訂單/訂位統一紀錄表
-- **mms_order_review**：訂單評價，`record_id` 直接沿用對應 `mms_order_record.record_id`（1:0..1，無獨立序列），一筆訂單至多一筆評價由 PK 天然保證。新增評價會同步把訂單的 `comment_status` 改成 `02`。`GET /services/{service_id}/reviews` 是全平台唯一不需身分驗證即可呼叫的公開端點（評價牆）
-- **pms_form 系列**：諮詢表單結構（group → topic → option/media）
+- **mms_order_review**：訂單評價，`record_id` 直接沿用對應 `mms_order_record.record_id`（1:0..1，無獨立序列），一筆訂單至多一筆評價由 PK 天然保證。新增評價會同步把訂單的 `comment_status` 改成 `02`。`GET /services/{service_id}/reviews` 是全平台唯一不需身分驗證即可呼叫的公開端點（評價牆）。bff_server 所有回傳訂單的端點（`view_orders`、`list_orders`、`create_order`、`update_order`）都會用 `review_utils.py` 把對應評價併入訂單物件的 `review` 欄位（沒評價過則為 `null`），前端不需要另外呼叫評價 API。使用者提交評價走 `app_api.py` 的 `POST /orders/{record_id}/review`，修改評價走 `PATCH /users/{inbr_account_id}/orders/{record_id}/review`（皆為轉發 api_server，業務規則如訂單須完成、身分比對、防重複皆由 api_server 驗證）。
+- **pms_form 系列**：諮詢表單結構（form → group → topic → option/media）。merchant_api.py 的 `POST /forms` 提供一次性建立表單+巢狀題組/題目/選項的組裝端點（api_server 只有單筆建立端點，BFF 依序呼叫 4 層 API 再組裝回傳，無跨層交易保證，中途失敗不會自動回滾）
 - **pms_form_feedback**：使用者填寫表單後的回饋記錄
 
 完整規格見 `Database/API_Reference.md` 和 `Database/database/*.sql` 的欄位註解（COMMENT ON COLUMN）。整體16張表的關係圖與逐欄位種子資料覆蓋狀況見 `Database/database/README.md`。

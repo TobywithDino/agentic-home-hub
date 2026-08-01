@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 
 from app.client import DbApiClient
 from app.deps import get_db_api_client
+from app.review_utils import attach_reviews_to_orders
 
 router = APIRouter(prefix="/app-api", tags=["APP 端"])
 
@@ -142,24 +143,112 @@ async def view_orders(
     ```json
     {
       "feedbacks": [ { "feedback_no": "...", "status": "0", "...": "..." } ],
-      "orders": [ { "record_id": 1, "order_no": "...", "order_status": "12", "...": "..." } ]
+      "orders": [
+        {
+          "record_id": 1, "order_no": "...", "order_status": "12",
+          "review": { "overall_rating": 5, "review_content": "..." },
+          "...": "..."
+        }
+      ]
     }
     ```
     - `feedbacks`：狀態為未處理（`status="0"`）的諮詢回饋單
-    - `orders`：該會員的全部訂單
+    - `orders`：該會員的全部訂單，每筆訂單附加 `review` 欄位——
+      有評價過的訂單是完整評價物件，沒評價過則是 `null`
 
     **說明**
 
     取得該會員的未處理諮詢與全部訂單，組裝後一次回傳，
-    供前端顯示訂單/諮詢總覽頁面。
+    供前端顯示訂單/諮詢總覽頁面。訂單評價（`mms_order_review`）
+    一併查出並附加到對應訂單上，前端不需要再另外呼叫評價 API。
     """
     feedbacks_resp = await db_api.get(f"/users/{inbr_account_id}/feedbacks", params={"limit": 200})
     orders_resp = await db_api.get(f"/users/{inbr_account_id}/orders", params={"limit": 200})
+    reviews_resp = await db_api.get(f"/users/{inbr_account_id}/reviews", params={"limit": 200})
 
     feedbacks = [f for f in feedbacks_resp.json()["items"] if f["status"] == "0"]
     orders = orders_resp.json()["items"]
+    reviews = reviews_resp.json()["items"]
+
+    orders = attach_reviews_to_orders(orders, reviews)
 
     return {"feedbacks": feedbacks, "orders": orders}
+
+
+@router.post("/orders/{record_id}/review", status_code=201)
+async def create_order_review(
+    record_id: int,
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """對已完成的訂單提交評價
+
+    **輸入**
+    - `record_id` (path, int): 訂單內部 ID（`mms_order_record.record_id`）
+    - body：
+    ```json
+    {
+      "inbr_account_id": "019c0464-2d01-73f0-9f9b-d1392fdb941a",
+      "overall_rating": 5,
+      "rating_detail": { "service": 5, "attitude": 4 },
+      "review_content": "服務很好，準時到府",
+      "media": ["https://.../photo1.jpg"]
+    }
+    ```
+    `overall_rating` 為 1~5 的整數；`rating_detail`、`review_content`、`media` 皆為可選。
+
+    **輸出**：建立後的完整評價物件
+    ```json
+    {
+      "record_id": 1, "order_no": "...", "service_vendor_id": 1, "service_id": 17,
+      "inbr_account_id": "...", "overall_rating": 5, "review_content": "...",
+      "status": "01", "cre_time": "..."
+    }
+    ```
+
+    **說明**
+
+    使用者對一筆已完成訂單提交評價（一筆訂單至多一筆評價）。
+    api_server 會驗證：訂單狀態須為 `80`（已完成）、`inbr_account_id`
+    須與訂單的下單會員一致、且該訂單尚未被評價過（否則回 409）。
+    成功後會自動把對應訂單的 `comment_status` 改成 `02`（已評價）。
+    """
+    resp = await db_api.post(f"/orders/{record_id}/review", json=payload)
+    return resp.json()
+
+
+@router.patch("/users/{inbr_account_id}/orders/{record_id}/review")
+async def update_order_review(
+    inbr_account_id: str,
+    record_id: int,
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """修改自己對某筆訂單提交過的評價
+
+    **輸入**
+    - `inbr_account_id` (path, uuid): 會員 UUID（須為原評價者本人）
+    - `record_id` (path, int): 訂單內部 ID
+    - body（只需傳要修改的欄位）：
+    ```json
+    {
+      "overall_rating": 4,
+      "rating_detail": { "service": 4, "attitude": 5 },
+      "review_content": "補充：後續維修也很快",
+      "media": ["https://.../photo2.jpg"]
+    }
+    ```
+    `overall_rating` 若有傳必須是 1~5 的整數。
+
+    **輸出**：更新後的完整評價物件
+
+    **說明**
+
+    使用者修改自己先前提交的評價。api_server 會比對 `inbr_account_id`
+    是否與該筆評價的原評價者一致，不一致回 403；訂單尚未被評價過則回 404。
+    """
+    resp = await db_api.patch(f"/users/{inbr_account_id}/orders/{record_id}/review", json=payload)
+    return resp.json()
 
 
 @router.patch("/users/{inbr_account_id}")
