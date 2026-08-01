@@ -13,6 +13,8 @@
 5. [檢查 / 重啟 API service](#5-檢查--重啟-api-service)
 6. [更新程式碼（重新部署新版本）](#6-更新程式碼重新部署新版本)
 7. [連線資料庫（RDS）](#7-連線資料庫rds)
+   - [7.1 從 EC2 內部連](#71-從-ec2-內部連先連進-ec2-再操作)
+   - [7.2 從本機直接用 GUI 工具連（推薦）](#72-從本機直接用-gui-工具連推薦不用先連進-ec2)
 8. [常見問題排解](#8-常見問題排解)
 9. [已知限制 / 安全提醒](#9-已知限制--安全提醒)
 
@@ -177,7 +179,11 @@ $openapi = Invoke-RestMethod -Uri "http://52.10.163.115:8000/openapi.json"
 
 ## 7. 連線資料庫（RDS）
 
-RDS **沒有公開存取**，只能從 VPC 內部連（也就是從這台 EC2）。想直接用 psql 或其他工具查資料庫內容，先連進 EC2（第4節），再從裡面連：
+RDS **刻意設定為沒有公開存取**（`PubliclyAccessible: false`），這是為了避免帳密外流後資料庫被任意讀寫。有兩種方式可以查看/操作裡面的資料，都不需要修改 RDS 的公開存取設定：
+
+### 7.1 從 EC2 內部連（先連進 EC2 再操作）
+
+先連進 EC2（第4節），再從裡面連：
 
 ```bash
 source /home/ssm-user/aiwave/venv/bin/activate
@@ -193,6 +199,66 @@ print(cur.fetchone())
 或者裝 `postgresql` client 直接用 `psql`（AL2023 預設沒裝，需要 `sudo dnf install -y postgresql16`）。
 
 資料庫密碼存在 EC2 上的 `/home/ssm-user/aiwave/api_server/.env`（`PG_PASSWORD`），連進 EC2 後可以直接 `cat` 出來看，不會另外用聊天工具傳送這組密碼。
+
+### 7.2 從本機直接用 GUI 工具連（推薦，不用先連進 EC2）
+
+如果想用 DBeaver / pgAdmin / TablePlus 這類 GUI 工具直接瀏覽資料庫內容（比在終端機打SQL方便很多），可以透過 **SSM Port Forwarding** 在本機開一個通道，把本機某個埠轉發到 RDS，資料庫本身完全不需要改成公開存取，安全群組也不用動。
+
+**這個方法已經實測驗證過**：本機開通道後用 `psycopg2` 連線讀取 `mms_order_record`/`mms_order_review` 都正常。
+
+#### 步驟1：安裝 Session Manager Plugin（第一次使用需要，跟第4.1節是同一個東西）
+
+```powershell
+Invoke-WebRequest -Uri "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/windows/SessionManagerPluginSetup.exe" -OutFile "$env:TEMP\SessionManagerPluginSetup.exe"
+Start-Process -FilePath "$env:TEMP\SessionManagerPluginSetup.exe" -ArgumentList "/quiet" -Wait
+```
+
+裝完後**重新開一個終端機視窗**（讓新裝的 PATH 生效，不然 `aws` 指令會說找不到 plugin）。
+
+#### 步驟2：建立參數檔
+
+存成 `portfwd_params.json`（放哪都可以，指令裡路徑對應改）：
+
+```json
+{
+    "host": ["aiwave-db.c1m8oq4cswto.us-west-2.rds.amazonaws.com"],
+    "portNumber": ["5432"],
+    "localPortNumber": ["15432"]
+}
+```
+
+#### 步驟3：開通道
+
+```powershell
+aws ssm start-session --profile agentic-home-hub --region us-west-2 --target i-0a2d19c738be6cb09 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters file://portfwd_params.json
+```
+
+看到這樣的輸出代表通道建立成功：
+
+```
+Starting session with SessionId: Participant-xxxxxxxxxxxxxxxxx
+Port 15432 opened for sessionId Participant-xxxxxxxxxxxxxxxxx.
+Waiting for connections...
+```
+
+**這個終端機視窗要保持開著**，通道只在這個process活著的時候有效，關掉視窗或Ctrl+C就斷線（要斷線就直接關視窗，沒有其他步驟）。
+
+#### 步驟4：用任何 PostgreSQL 工具連本機的轉發埠
+
+在 DBeaver / pgAdmin / psql 的連線設定填：
+
+| 欄位 | 值 |
+|---|---|
+| Host | `localhost` |
+| Port | `15432`（對應步驟2設定的 `localPortNumber`） |
+| Database | `aiwave` |
+| User | `postgres` |
+| Password | 跟保管憑證的人要（存在 EC2 的 `/home/ssm-user/aiwave/api_server/.env`） |
+| SSL mode | `require` |
+
+連上後看到的是 RDS 上即時、完整的資料，效果跟直接連公開端點一樣，但 RDS 本身從頭到尾沒有改過任何公開存取設定。
+
+> 一個人一次只需要一個通道，多人要同時查看的話，每個人各自在自己電腦上重複步驟1~4即可，不會互相干擾（每個 SSM session 是獨立的）。
 
 ## 8. 常見問題排解
 
@@ -216,6 +282,7 @@ print(cur.fetchone())
 - **8000 埠對整個網際網路開放**（`0.0.0.0/0`），沒有 HTTPS/TLS。
 - **CORS 允許所有來源**（`*`）。
 - **RDS 密碼明文放在 EC2 的 `.env` 檔案**，沒有用 AWS Secrets Manager。
+- **RDS 刻意維持不公開存取**：即使開發階段想讓隊友方便查看資料庫內容，也不建議把 RDS 改成 `PubliclyAccessible: true` 對外開放5432埠——一旦開放，任何拿到這組明文密碼的人就能直接連線讀寫整個資料庫，且公網上的自動化掃描器通常幾分鐘到幾小時內就會嘗試連線開放的資料庫埠。想讓隊友查看資料庫內容，請用第7.2節的 SSM Port Forwarding 方式，不需要更動RDS或安全群組的任何設定。
 - 這是 workshop 臨時帳號，所有資源都有可能被自動回收，重要資料/程式碼請以 git repo 為準，不要依賴這個環境長期存在。
 
 完整的部署原理與本機建置方式見 `Database/部署手冊.md`；API 端點規格見 `Database/API_Reference.md`。
