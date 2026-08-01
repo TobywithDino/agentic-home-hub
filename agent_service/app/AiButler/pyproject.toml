@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "AiButler"
+version = "0.1.0"
+description = "智慧社區服務平台 - AI 生活管家（AgentCore Runtime）"
+requires-python = ">=3.10"
+dependencies = [
+    # agentcore.json 的 instrumentation.enableOtel 預設為 true，會用
+    # opentelemetry-instrument 包住 entrypoint。少了這個套件啟動會失敗。
+    "aws-opentelemetry-distro",
+    "bedrock-agentcore>=1.9.1",
+    "boto3>=1.43.51",
+    "botocore[crt]>=1.35.0",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

@@ -1,0 +1,294 @@
+# -*- coding: utf-8 -*-
+"""
+呼叫 bff_server 的 client。
+
+隊友的 bff_server 還沒長出全部端點，所以這裡有兩種模式：
+  - settings.bff_base_url 有值 → 真的打 HTTP
+  - 留空                        → 走內建假資料
+
+假資料的形狀刻意照 Database/API_Reference.md 的真實 schema 做，
+等 bff_server 好了只要設環境變數就切換，tool 程式碼一行都不用改。
+
+架構原則（見 .kiro/steering/project-overview.md）：
+這一層只打 bff_server，不直接碰 Database/api_server，更不碰 DB。
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import httpx
+
+from config import get_settings
+
+log = logging.getLogger(__name__)
+
+
+class BackendError(RuntimeError):
+    """後端呼叫失敗。會被包成 tool error 回餵給模型，讓它改口或改參數。"""
+
+
+class BackendClient:
+    def __init__(self) -> None:
+        settings = get_settings()
+        self._enabled = settings.backend_enabled
+        self._client: httpx.AsyncClient | None = None
+        if self._enabled:
+            self._client = httpx.AsyncClient(
+                base_url=settings.bff_base_url,
+                timeout=settings.bff_timeout_seconds,
+            )
+
+    @property
+    def live(self) -> bool:
+        return self._enabled
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+
+    async def _get(self, path: str, **params: Any) -> Any:
+        assert self._client is not None
+        clean = {k: v for k, v in params.items() if v is not None}
+        try:
+            resp = await self._client.get(path, params=clean)
+        except httpx.RequestError as exc:
+            raise BackendError(f"連不上後端: {exc}") from exc
+        if resp.status_code >= 400:
+            raise BackendError(f"後端回 {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
+    # ------------------------------------------------------------------
+    # 依服務類型找服務商
+    # 對應 GET /app-api/service-types/{service_type}/vendors
+    # ------------------------------------------------------------------
+    async def find_vendors(
+        self, service_type: str, label_ids: list[int] | None = None
+    ) -> list[dict[str, Any]]:
+        if not self._enabled:
+            return _stub_vendors(service_type, label_ids)
+
+        labels = ",".join(str(i) for i in label_ids) if label_ids else None
+        return await self._get(
+            f"/app-api/service-types/{service_type}/vendors", labels=labels
+        )
+
+    # ------------------------------------------------------------------
+    # 取服務商的表單完整結構
+    # 對應 api_server GET /vendors/{id}/forms/full（需 bff_server 補一支轉發）
+    # ------------------------------------------------------------------
+    async def get_vendor_forms(self, service_vendor_id: int) -> list[dict[str, Any]]:
+        if not self._enabled:
+            return _stub_forms(service_vendor_id)
+
+        return await self._get(f"/app-api/vendors/{service_vendor_id}/forms/full")
+
+    # ------------------------------------------------------------------
+    # 會員資料，用來自動填聯絡資訊
+    # 對應 api_server GET /users/{inbr_account_id}
+    # ------------------------------------------------------------------
+    async def get_user(self, inbr_account_id: str) -> dict[str, Any]:
+        if not self._enabled:
+            return _stub_user(inbr_account_id)
+
+        return await self._get(f"/app-api/users/{inbr_account_id}")
+
+
+# ==========================================================================
+# 假資料。形狀對齊 API_Reference.md，接上 bff_server 後這整段可以刪。
+# ==========================================================================
+
+_STUB_VENDORS: dict[str, list[dict[str, Any]]] = {
+    "6": [  # 餐廳訂位
+        {
+            "id": 101,
+            "name": "鳥花枝居酒屋",
+            "description": "信義區日式居酒屋，串燒與清酒為主",
+            "matched_services": [
+                {
+                    "id": 6001,
+                    "type": "6",
+                    "name": "晚餐訂位",
+                    "img_url": "https://example.com/izakaya.jpg",
+                }
+            ],
+        },
+        {
+            "id": 102,
+            "name": "初魚鐵板燒",
+            "description": "信義區無菜單鐵板燒，需提前訂位",
+            "matched_services": [
+                {
+                    "id": 6002,
+                    "type": "6",
+                    "name": "無菜單套餐訂位",
+                    "img_url": "https://example.com/teppanyaki.jpg",
+                }
+            ],
+        },
+    ],
+    "2": [  # 家電清洗
+        {
+            "id": 201,
+            "name": "潔淨家電清洗",
+            "description": "洗衣機、冷氣深度清洗，到府服務",
+            "matched_services": [
+                {
+                    "id": 2001,
+                    "type": "2",
+                    "name": "洗衣機槽清洗",
+                    "img_url": "https://example.com/washer.jpg",
+                }
+            ],
+        }
+    ],
+}
+
+# label: 1=寵物友善 2=24小時營業 3=專業認證 4=免費估價 5=到府服務 6=快速到達
+_STUB_VENDOR_LABELS: dict[int, set[int]] = {
+    101: {2},
+    102: {3},
+    201: {3, 4, 5},
+}
+
+
+def _stub_vendors(service_type: str, label_ids: list[int] | None) -> list[dict[str, Any]]:
+    rows = _STUB_VENDORS.get(service_type, [])
+    if not label_ids:
+        return rows
+    required = set(label_ids)
+    return [v for v in rows if required.issubset(_STUB_VENDOR_LABELS.get(v["id"], set()))]
+
+
+# 表單結構照 GET /forms/{form_id}/full 的形狀：{form, groups, topics}
+# topic.type: 1簡答 2詳答 3單選 4複選 5地區選單 6上傳照片 7備註 8聯絡資料 9日期題 10聯絡資料(不含地址)
+_STUB_FORMS: dict[int, list[dict[str, Any]]] = {
+    101: [
+        {
+            "form": {
+                "id": 9001,
+                "service_vendor_id": 101,
+                "type": "1",
+                "sub_type": "1",
+                "name": "訂位需求單",
+            },
+            "groups": [{"id": 1, "form_id": 9001, "name": "訂位資訊", "sort": 1}],
+            "topics": [
+                {
+                    "id": 1, "form_id": 9001, "form_group_id": 1, "type": "9",
+                    "title": "希望訂位日期", "is_required": "1", "sort": 1,
+                    "start_date_offset_days": 0, "end_date_offset_days": 30,
+                    "options": [], "media": [], "county_district_relations": [],
+                },
+                {
+                    "id": 2, "form_id": 9001, "form_group_id": 1, "type": "3",
+                    "title": "希望時段", "is_required": "1", "sort": 2,
+                    "options": [
+                        {"id": 21, "option_name": "17:30"},
+                        {"id": 22, "option_name": "18:00"},
+                        {"id": 23, "option_name": "19:00"},
+                        {"id": 24, "option_name": "20:30"},
+                    ],
+                    "media": [], "county_district_relations": [],
+                },
+                {
+                    "id": 3, "form_id": 9001, "form_group_id": 1, "type": "1",
+                    "title": "用餐人數", "is_required": "1", "sort": 3,
+                    "is_number_only": "1",
+                    "options": [], "media": [], "county_district_relations": [],
+                },
+                {
+                    "id": 4, "form_id": 9001, "form_group_id": 1, "type": "10",
+                    "title": "聯絡資料", "is_required": "1", "sort": 4,
+                    "options": [], "media": [], "county_district_relations": [],
+                },
+                {
+                    "id": 5, "form_id": 9001, "form_group_id": 1, "type": "7",
+                    "title": "特殊需求", "is_required": "0", "sort": 5,
+                    "options": [], "media": [], "county_district_relations": [],
+                },
+            ],
+        }
+    ],
+    102: [
+        {
+            "form": {
+                "id": 9002, "service_vendor_id": 102, "type": "1",
+                "sub_type": "1", "name": "無菜單訂位單",
+            },
+            "groups": [{"id": 2, "form_id": 9002, "name": "訂位資訊", "sort": 1}],
+            "topics": [
+                {
+                    "id": 11, "form_id": 9002, "form_group_id": 2, "type": "9",
+                    "title": "希望訂位日期", "is_required": "1", "sort": 1,
+                    "start_date_offset_days": 1, "end_date_offset_days": 60,
+                    "options": [], "media": [], "county_district_relations": [],
+                },
+                {
+                    "id": 12, "form_id": 9002, "form_group_id": 2, "type": "3",
+                    "title": "希望時段", "is_required": "1", "sort": 2,
+                    "options": [
+                        {"id": 31, "option_name": "18:00"},
+                        {"id": 32, "option_name": "19:00"},
+                    ],
+                    "media": [], "county_district_relations": [],
+                },
+                {
+                    "id": 13, "form_id": 9002, "form_group_id": 2, "type": "1",
+                    "title": "用餐人數", "is_required": "1", "sort": 3,
+                    "is_number_only": "1",
+                    "options": [], "media": [], "county_district_relations": [],
+                },
+                {
+                    "id": 14, "form_id": 9002, "form_group_id": 2, "type": "10",
+                    "title": "聯絡資料", "is_required": "1", "sort": 4,
+                    "options": [], "media": [], "county_district_relations": [],
+                },
+            ],
+        }
+    ],
+    201: [
+        {
+            "form": {
+                "id": 9003, "service_vendor_id": 201, "type": "2",
+                "sub_type": "2", "name": "家電清洗估價單",
+            },
+            "groups": [{"id": 3, "form_id": 9003, "name": "服務需求", "sort": 1}],
+            "topics": [
+                {
+                    "id": 21, "form_id": 9003, "form_group_id": 3, "type": "3",
+                    "title": "洗衣機類型", "is_required": "1", "sort": 1,
+                    "options": [
+                        {"id": 41, "option_name": "直立式", "unit_price": 1600, "unit": "台"},
+                        {"id": 42, "option_name": "滾筒式", "unit_price": 2200, "unit": "台"},
+                    ],
+                    "media": [], "county_district_relations": [],
+                },
+                {
+                    "id": 22, "form_id": 9003, "form_group_id": 3, "type": "9",
+                    "title": "希望到府日期", "is_required": "1", "sort": 2,
+                    "start_date_offset_days": 2, "end_date_offset_days": 30,
+                    "options": [], "media": [], "county_district_relations": [],
+                },
+                {
+                    "id": 23, "form_id": 9003, "form_group_id": 3, "type": "8",
+                    "title": "聯絡資料與地址", "is_required": "1", "sort": 3,
+                    "options": [], "media": [], "county_district_relations": [],
+                },
+            ],
+        }
+    ],
+}
+
+
+def _stub_forms(service_vendor_id: int) -> list[dict[str, Any]]:
+    return _STUB_FORMS.get(service_vendor_id, [])
+
+
+def _stub_user(inbr_account_id: str) -> dict[str, Any]:
+    return {
+        "inbr_account_id": inbr_account_id,
+        "contact_name": "王小明",
+        "contact_mobile": "0912345678",
+        "contact_email": "user01@example.com",
+    }

@@ -1,0 +1,67 @@
+{
+  "name": "AgenticHomeHubButler",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:project-name": "AgenticHomeHubButler"
+  },
+  "runtimes": [
+    {
+      "name": "AiButler",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/AiButler/",
+      "runtimeVersion": "PYTHON_3_13",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "instrumentation": {
+        "enableOtel": true
+      },
+      "envVars": [
+        {
+          "name": "BEDROCK_MODEL_ID",
+          "value": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "BFF_BASE_URL",
+          "value": ""
+        }
+      ]
+    }
+  ],
+  "memories": [
+    {
+      "name": "ButlerMemory",
+      "eventExpiryDuration": 30,
+      "strategies": [
+        {
+          "type": "USER_PREFERENCE",
+          "namespaceTemplates": [
+            "/preferences/{actorId}"
+          ]
+        },
+        {
+          "type": "SUMMARIZATION",
+          "namespaceTemplates": [
+            "/summaries/{actorId}/{sessionId}"
+          ]
+        }
+      ]
+    }
+  ],
+  "knowledgeBases": [],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [],
+  "datasets": [],
+  "payments": []
+}
