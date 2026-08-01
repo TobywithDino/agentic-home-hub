@@ -164,6 +164,236 @@ async def set_service_labels(
     ]
 
 
+@router.get("/vendors/{service_vendor_id}/forms")
+async def list_vendor_forms(
+    service_vendor_id: int,
+    type: str | None = None,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得該商家的所有表單清單（不含巢狀題組/題目內容）
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID
+    - `type` (query, string, 可選): 篩選表單類型代碼。
+      1=C端(無需評估) 2=C端(需評估) 3=B端 4=轉訂單流程 5=客服。不傳則回傳全部類型。
+
+    **輸出**：表單物件陣列（僅表單主檔欄位，不含題組/題目/選項）
+    ```json
+    [
+      {
+        "id": 10, "service_vendor_id": 1, "type": "1", "sub_type": "1",
+        "name": "居家清潔諮詢表", "review_status": "0=未審核 1=已審核",
+        "is_enable": "0=禁用 1=啟用", "cre_time": "...", "...": "..."
+      }
+    ]
+    ```
+
+    **說明**
+
+    列出該商家名下建立過的所有表單（不論審核狀態、啟用狀態），
+    用於商家後台「表單管理」頁面顯示表單清單。這裡只回傳每張表單的
+    主檔資訊，不含底下的題組/題目/選項；若要看某張表單的完整內容，
+    請改用建立表單時回傳的巢狀結構，或請隊友的 api_server 開放
+    `GET /forms/{form_id}/full`（目前 BFF 尚未包裝此端點）。
+    """
+    resp = await db_api.get(
+        "/forms",
+        params={"service_vendor_id": service_vendor_id, "type": type, "limit": 200},
+    )
+    return resp.json()["items"]
+
+
+@router.get("/forms/{form_id}/full")
+async def get_form_full(
+    form_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某張表單的完整內容（含題組/題目/選項/圖片/地區關聯）
+
+    **輸入**
+    - `form_id` (path, int): 表單 ID
+
+    **輸出**：完整巢狀表單結構
+    ```json
+    {
+      "form": {
+        "id": 10, "service_vendor_id": 1, "type": "1", "sub_type": "1",
+        "name": "居家清潔諮詢表", "review_status": "0", "is_enable": "1", "...": "..."
+      },
+      "groups": [
+        { "id": 20, "form_id": 10, "name": "基本資料", "sort": 0, "...": "..." }
+      ],
+      "topics": [
+        {
+          "id": 30, "form_id": 10, "form_group_id": 20,
+          "type": "3", "title": "您需要哪種清潔服務？", "is_required": "1", "sort": 0,
+          "media": [ { "id": 50, "img_url": "https://...", "sort": 0 } ],
+          "options": [ { "id": 40, "option_name": "居家清潔", "unit_price": 1000, "...": "..." } ],
+          "county_district_relations": []
+        }
+      ]
+    }
+    ```
+    `topics` 是平面陣列（非巢狀在 groups 底下），每個 topic 帶自己的
+    `form_group_id` 可對應回所屬題組；每個 topic 已內嵌好自己的
+    `media`、`options`、`county_district_relations`。
+
+    **說明**
+
+    商家後台「表單管理」頁面中，商家從 `GET /vendors/{id}/forms`
+    清單點擊某張表單後，呼叫此端點取得該表單的完整內容用於編輯頁面
+    渲染（顯示所有題組、題目、選項、輔助圖片、地區限制）。
+    直接轉發 api_server 現成的組裝端點，未做額外處理。
+    """
+    resp = await db_api.get(f"/forms/{form_id}/full")
+    return resp.json()
+
+
+@router.patch("/forms/{form_id}")
+async def update_form(
+    form_id: int,
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """更新表單完整內容（表單主檔 + 題組 + 題目 + 選項，差異比對式）
+
+    **輸入**
+    - `form_id` (path, int): 表單 ID
+    - body：與 `GET /forms/{form_id}/full` 相同的巢狀結構，前端載入後
+      直接在畫面上編輯、改完整包送回即可
+    ```json
+    {
+      "form": {
+        "name": "表單名稱",
+        "intro_content": "服務介紹(html)",
+        "notice_content": "注意事項(html)",
+        "terms_content": "服務條款(html)",
+        "is_enable": "0=禁用 1=啟用"
+      },
+      "groups": [
+        {
+          "id": 20,
+          "name": "基本資料(既有題組,帶id=更新)",
+          "sort": 0,
+          "topics": [
+            {
+              "id": 30,
+              "title": "既有題目,帶id=更新",
+              "is_required": "1",
+              "sort": 0,
+              "options": [
+                { "id": 40, "option_name": "既有選項,帶id=更新", "unit_price": 1200 },
+                { "option_name": "新選項,不帶id=新增", "unit_price": 800 }
+              ]
+            },
+            { "title": "新題目,不帶id=新增", "type": "1", "is_required": "0", "sort": 1 }
+          ]
+        },
+        { "name": "新題組,不帶id=新增", "sort": 1, "topics": [] }
+      ]
+    }
+    ```
+    - `form` 可省略（不需要改表單主檔欄位時）
+    - 每個 group/topic/option **有 `id`** = 更新既有項目；**沒有 `id`** = 新增
+    - 目前資料庫中存在、但這次 payload 沒帶到的 group/topic/option 會被
+      **刪除**（差異比對，比照 `PUT /services/{id}/labels` 的覆蓋式邏輯）
+    - 題目可透過放到不同的 `groups[].topics[]` 底下搬到別的題組（後端會
+      更新該題目的 `form_group_id`）；選項目前**不支援**搬到別的題目
+      （若要搬，等同刪除原選項 + 在新題目下新增一筆）
+    - 本端點不處理題目輔助圖片（`pms_topic_media`），既有圖片不會被異動
+
+    **輸出**：更新後的完整巢狀表單結構，格式同 `GET /forms/{form_id}/full`
+
+    **說明**
+
+    給商家後台「編輯表單」頁面用：頁面用 `GET /forms/{form_id}/full`
+    載入表單後，商家編輯表單名稱/題組/題目/選項，改完整包送回這支 API，
+    不需要前端自己算差異、分別呼叫多支底層端點。
+
+    實作流程：
+    1. 先呼叫 `GET /forms/{form_id}/full` 取得資料庫目前的實際狀態
+    2. 比對 payload 與現況，算出現況存在但 payload 沒帶到的
+       group/topic/option（代表要刪除）
+    3. 依 選項 → 題目 → 題組 的順序刪除（避免刪除題組後題目變成孤兒資料，
+       雖然本專案資料表無實體 FK，僅為邏輯一致性考量）
+    4. 依 表單 → 題組 → 題目 → 選項 的順序，對有 `id` 的項目呼叫
+       PATCH 更新，對沒有 `id` 的項目呼叫 POST 新增
+    5. 重新呼叫 `GET /forms/{form_id}/full` 回傳最新完整結構
+
+    ⚠️ api_server 沒有跨資源的交易機制，若中途某一步失敗，前面已完成的
+    刪除/新增/更新不會自動回滾，可能造成部分內容不一致，需要另外檢查修正。
+    """
+    current = (await db_api.get(f"/forms/{form_id}/full")).json()
+
+    current_group_ids = {g["id"] for g in current["groups"]}
+    current_topic_ids = {t["id"] for t in current["topics"]}
+    current_option_ids = {o["id"] for t in current["topics"] for o in t.get("options", [])}
+
+    groups_payload = payload.get("groups", [])
+
+    # payload 中帶 id 的 group/topic/option = 要保留（更新）的既有項目
+    payload_group_ids = {g["id"] for g in groups_payload if "id" in g}
+    payload_topic_ids = {
+        t["id"] for g in groups_payload for t in g.get("topics", []) if "id" in t
+    }
+    payload_option_ids = {
+        o["id"]
+        for g in groups_payload
+        for t in g.get("topics", [])
+        for o in t.get("options", [])
+        if "id" in o
+    }
+
+    # 現況有、payload 沒帶到的項目 = 要刪除。依 選項→題目→題組 順序刪除。
+    for option_id in current_option_ids - payload_option_ids:
+        await db_api.delete(f"/topic-options/{option_id}")
+    for topic_id in current_topic_ids - payload_topic_ids:
+        await db_api.delete(f"/form-topics/{topic_id}")
+    for group_id in current_group_ids - payload_group_ids:
+        await db_api.delete(f"/form-groups/{group_id}")
+
+    # 更新表單主檔欄位（可選）
+    form_payload = payload.get("form")
+    if form_payload:
+        await db_api.patch(f"/forms/{form_id}", json=form_payload)
+
+    # 依 表單→題組→題目→選項 順序新增/更新
+    for group_payload in groups_payload:
+        topics_payload = group_payload.get("topics", [])
+        group_body = {k: v for k, v in group_payload.items() if k not in ("id", "topics")}
+
+        if "id" in group_payload:
+            group_id = group_payload["id"]
+            await db_api.patch(f"/form-groups/{group_id}", json=group_body)
+        else:
+            group_resp = await db_api.post(f"/forms/{form_id}/groups", json=group_body)
+            group_id = group_resp.json()["id"]
+
+        for topic_payload in topics_payload:
+            options_payload = topic_payload.get("options", [])
+            topic_body = {k: v for k, v in topic_payload.items() if k not in ("id", "options")}
+            # 帶入所屬題組 id，題目搬到別的題組時靠這裡更新 form_group_id
+            topic_body["form_group_id"] = group_id
+
+            if "id" in topic_payload:
+                topic_id = topic_payload["id"]
+                await db_api.patch(f"/form-topics/{topic_id}", json=topic_body)
+            else:
+                topic_resp = await db_api.post(f"/forms/{form_id}/topics", json=topic_body)
+                topic_id = topic_resp.json()["id"]
+
+            for option_payload in options_payload:
+                option_body = {k: v for k, v in option_payload.items() if k != "id"}
+                if "id" in option_payload:
+                    option_id = option_payload["id"]
+                    await db_api.patch(f"/topic-options/{option_id}", json=option_body)
+                else:
+                    await db_api.post(f"/form-topics/{topic_id}/options", json=option_body)
+
+    resp = await db_api.get(f"/forms/{form_id}/full")
+    return resp.json()
+
+
 @router.post("/forms", status_code=201)
 async def create_form_with_content(
     payload: dict,
