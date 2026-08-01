@@ -14,6 +14,8 @@ agentic-home-hub/
 │   ├── 部署手冊.md            本機建置 + AWS 遷移完整手冊
 │   ├── AWS操作手冊.md         目前 AWS 環境連線/操作指南（EC2 IP、SSM 連線方式等）
 │   ├── API_Reference.md      api_server 94 個端點完整規格
+│   ├── patch_test_pii.ps1    一次性腳本：補寫種子測試帳號（user01~04/vendor01~03）的PII明文，
+│   │                         用法見AWS操作手冊.md「5.1」（需先設定PII_ENCRYPTION_KEY_B64並重啟aiwave-api）
 │   ├── database/             DDL（*.sql）+ 種子資料（*.json）+ 建置腳本
 │   └── api_server/           FastAPI，直接操作 PostgreSQL，跑在 EC2 8000 埠
 │       └── app/routers/      geo / catalog / accounts / forms / feedbacks / orders / reviews / summaries
