@@ -234,7 +234,7 @@ async def update_feedback_status(
     - `feedback_no` (path, string): 回饋單編號
     - body：
     ```json
-    { "is_read": "0=未讀 1=已讀", "status": "0=未處理 1=處理中 2=已完成" }
+    { "is_read": "0=未讀 1=已讀", "status": "0=未處理 1=已完成 2=拒絕" }
     ```
 
     **輸出**：更新後的完整 feedback 物件
