@@ -130,6 +130,48 @@ async def list_vendor_services(
     return resp.json()["items"]
 
 
+@router.get("/forms/{form_id}/full")
+async def get_form_full(
+    form_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某張表單的完整內容（含題組/題目/選項/圖片/地區關聯）
+
+    **輸入**
+    - `form_id` (path, int): 表單 ID
+
+    **輸出**：完整巢狀表單結構
+    ```json
+    {
+      "form": {
+        "id": 10, "service_vendor_id": 1, "type": "1", "sub_type": "1",
+        "name": "居家清潔諮詢表", "review_status": "0", "is_enable": "1", "...": "..."
+      },
+      "groups": [
+        { "id": 20, "form_id": 10, "name": "基本資料", "sort": 0, "...": "..." }
+      ],
+      "topics": [
+        {
+          "id": 30, "form_id": 10, "form_group_id": 20,
+          "type": "3", "title": "您需要哪種清潔服務？", "is_required": "1", "sort": 0,
+          "media": [ { "id": 50, "img_url": "https://...", "sort": 0 } ],
+          "options": [ { "id": 40, "option_name": "居家清潔", "unit_price": 1000, "...": "..." } ],
+          "county_district_relations": []
+        }
+      ]
+    }
+    ```
+
+    **說明**
+
+    APP 端使用者要填寫諮詢表單前，呼叫此端點取得表單完整結構
+    （所有題組、題目、選項、輔助圖片、地區限制），供前端渲染填單頁面。
+    直接轉發 api_server 現成的組裝端點，未做額外處理。
+    """
+    resp = await db_api.get(f"/forms/{form_id}/full")
+    return resp.json()
+
+
 @router.post("/feedbacks", status_code=201)
 async def create_feedback(
     payload: dict,
