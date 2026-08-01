@@ -17,8 +17,10 @@ class ApiClient {
     this.onUnauthorized,
   }) : _dio = Dio(BaseOptions(
           baseUrl: baseUrl,
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 20),
+          // BFF 部分端點（例如 orders-overview 會逐筆補評價）回應偏慢，
+          // 逾時放寬避免正常回應被誤判為連線失敗。
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 60),
           headers: {'Content-Type': 'application/json'},
         )) {
     if (kDebugMode) {
@@ -117,8 +119,16 @@ class ApiClient {
   }
 
   bool _isRetryable(Object error) {
-    return error is NetworkError ||
-        (error is ServerError && (error.statusCode ?? 0) >= 500);
+    // 讀取逾時代表後端本來就慢，重試只會讓使用者多等好幾倍時間。
+    if (error is NetworkError) {
+      final cause = error.cause;
+      if (cause is DioException &&
+          cause.type == DioExceptionType.receiveTimeout) {
+        return false;
+      }
+      return true;
+    }
+    return error is ServerError && (error.statusCode ?? 0) >= 500;
   }
 
   /// 統一錯誤轉換：DioException → AppError。

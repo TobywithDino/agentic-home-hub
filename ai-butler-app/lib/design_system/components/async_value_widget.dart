@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -53,12 +54,14 @@ class _ErrorState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(Icons.wifi_off_rounded, size: 48, color: context.butler.secondaryText),
+            Icon(Icons.wifi_off_rounded,
+                size: 48, color: context.butler.secondaryText),
             const SizedBox(height: AppSpacing.sm),
             Text(
               _messageOf(error),
               textAlign: TextAlign.center,
-              style: AppTypography.body.copyWith(color: context.butler.secondaryText),
+              style: AppTypography.body
+                  .copyWith(color: context.butler.secondaryText),
             ),
             if (onRetry != null) ...<Widget>[
               const SizedBox(height: AppSpacing.md),
@@ -78,6 +81,9 @@ class _ErrorState extends StatelessWidget {
     } catch (_) {
       // error 沒有 message 欄位，落到下方預設文字。
     }
+    // debug 模式直接顯示原始錯誤，避免「服務暫時無法回應」蓋掉真正的原因
+    // （例如 DTO 解析失敗）導致現場無從追查。
+    if (kDebugMode) return '服務暫時無法回應\n($error)';
     return '服務暫時無法回應，請稍後再試';
   }
 }
@@ -110,7 +116,8 @@ class EmptyState extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: AppTypography.body.copyWith(color: context.butler.secondaryText),
+              style: AppTypography.body
+                  .copyWith(color: context.butler.secondaryText),
             ),
             if (actionLabel != null && onAction != null) ...<Widget>[
               const SizedBox(height: AppSpacing.md),

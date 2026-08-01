@@ -77,6 +77,12 @@ GoRouter buildAppRouter(Ref ref) {
                 path: Routes.home,
                 builder: (context, state) => const HomeScreen()),
           ]),
+          // AI 管家改成分頁（左邊數來第二個），對話內容在切換分頁時保留。
+          StatefulShellBranch(routes: <RouteBase>[
+            GoRoute(
+                path: Routes.chat,
+                builder: (context, state) => const ButlerChatScreen()),
+          ]),
           StatefulShellBranch(routes: <RouteBase>[
             GoRoute(
                 path: Routes.orders,
@@ -110,9 +116,14 @@ GoRouter buildAppRouter(Ref ref) {
         parentNavigatorKey: rootNavigatorKey,
         pageBuilder: (context, state) {
           final vendorId = int.parse(state.pathParameters['vendorId']!);
+          // 從哪個服務類型點進來就只顯示該類型的服務項目。
+          final serviceType = state.uri.queryParameters['serviceType'];
           return AppTransitions.sharedAxis(
             state: state,
-            child: VendorDetailScreen(vendorId: vendorId),
+            child: VendorDetailScreen(
+              vendorId: vendorId,
+              serviceType: serviceType,
+            ),
           );
         },
       ),
@@ -121,8 +132,16 @@ GoRouter buildAppRouter(Ref ref) {
         parentNavigatorKey: rootNavigatorKey,
         pageBuilder: (context, state) {
           final formId = int.parse(state.pathParameters['formId']!);
+          // service_id 由服務項目頁帶入，表單 API 本身不含此欄位。
+          final serviceIdRaw = state.uri.queryParameters['serviceId'];
           return AppTransitions.modal(
-              state: state, child: FormScreen(formId: formId));
+            state: state,
+            child: FormScreen(
+              formId: formId,
+              serviceId:
+                  serviceIdRaw == null ? null : int.tryParse(serviceIdRaw),
+            ),
+          );
         },
       ),
       GoRoute(
@@ -135,12 +154,6 @@ GoRouter buildAppRouter(Ref ref) {
             child: OrderDetailScreen(orderNo: orderNo),
           );
         },
-      ),
-      GoRoute(
-        path: Routes.chat,
-        parentNavigatorKey: rootNavigatorKey,
-        pageBuilder: (context, state) =>
-            AppTransitions.modal(state: state, child: const ButlerChatScreen()),
       ),
     ],
   );

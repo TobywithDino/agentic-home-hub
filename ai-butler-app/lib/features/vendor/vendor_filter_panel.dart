@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:ai_butler_app/data/mock/mock_seed_data.dart';
 import 'package:ai_butler_app/design_system/app_spacing.dart';
 import 'package:ai_butler_app/design_system/app_typography.dart';
 import 'package:ai_butler_app/domain/models/domain_models.dart';
+import 'package:ai_butler_app/providers/label_providers.dart';
 
 /// 服務商列表的篩選面板（Requirement 5.7-16）。
 ///
 /// 以 `showModalBottomSheet` 呈現，使用者選好後按「套用」回傳新的 [VendorQuery]。
-/// 依 [VendorCapabilities] 決定是否顯示評分/價格/可服務三項篩選。
-class VendorFilterPanel extends StatefulWidget {
+/// 標籤從 `GET /app-api/labels?service_type=...` 動態載入。
+class VendorFilterPanel extends ConsumerStatefulWidget {
   const VendorFilterPanel({
     super.key,
     required this.currentQuery,
@@ -40,22 +41,18 @@ class VendorFilterPanel extends StatefulWidget {
   }
 
   @override
-  State<VendorFilterPanel> createState() => _VendorFilterPanelState();
+  ConsumerState<VendorFilterPanel> createState() => _VendorFilterPanelState();
 }
 
-class _VendorFilterPanelState extends State<VendorFilterPanel> {
-  late String? _countyCode;
-  late String? _districtCode;
+class _VendorFilterPanelState extends ConsumerState<VendorFilterPanel> {
   late double? _minRating;
   late bool _availableOnly;
-  late List<String> _selectedTags;
+  late List<String> _selectedTags; // 存放 label id 的字串形式
   late VendorSortOption _sort;
 
   @override
   void initState() {
     super.initState();
-    _countyCode = widget.currentQuery.countyCode;
-    _districtCode = widget.currentQuery.districtCode;
     _minRating = widget.currentQuery.minRating;
     _availableOnly = widget.currentQuery.availableOnly;
     _selectedTags = List<String>.of(widget.currentQuery.selectedTags);
@@ -64,24 +61,18 @@ class _VendorFilterPanelState extends State<VendorFilterPanel> {
 
   void _apply() {
     final updated = widget.currentQuery.copyWith(
-      countyCode: _countyCode,
-      clearCounty: _countyCode == null,
-      districtCode: _districtCode,
-      clearDistrict: _districtCode == null,
       minRating: _minRating,
       clearMinRating: _minRating == null,
       availableOnly: _availableOnly,
       selectedTags: _selectedTags,
       sort: _sort,
-      page: 1, // 套用後回到第一頁（Requirement 5.14）
+      page: 1,
     );
     Navigator.of(context).pop(updated);
   }
 
   void _reset() {
     setState(() {
-      _countyCode = null;
-      _districtCode = null;
       _minRating = null;
       _availableOnly = false;
       _selectedTags = [];
@@ -91,30 +82,13 @@ class _VendorFilterPanelState extends State<VendorFilterPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final districts = _countyCode == null
-        ? const <(String, String)>[]
-        : (MockSeedData.districtsByCounty[_countyCode] ??
-            const <(String, String)>[]);
-
-    // 可用標籤清單（實際由後端依服務類型提供，此處 mock 固定清單）
-    const allTags = <String>[
-      '提供女技師',
-      '可帶寵物',
-      '可指定時段',
-      '當日預約',
-      '免費估價',
-      '24H急修',
-      '原廠認證',
-      '環保清潔劑',
-      '到府服務',
-      '免運費',
-    ];
-    // 只顯示前 6 個最常見的（避免畫面太擠）
-    final availableTags = allTags.take(6).toList();
+    // 依當前服務類型載入標籤
+    final serviceType = widget.currentQuery.serviceId?.toString();
+    final labelsAsync = ref.watch(labelsProvider(serviceType));
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.6,
-      minChildSize: 0.4,
+      initialChildSize: 0.55,
+      minChildSize: 0.35,
       maxChildSize: 0.85,
       expand: false,
       builder: (context, scrollController) => Padding(
@@ -126,82 +100,66 @@ class _VendorFilterPanelState extends State<VendorFilterPanel> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: <Widget>[
-                Text('篩選條件', style: AppTypography.title),
+                const Text('篩選條件', style: AppTypography.title),
                 TextButton(onPressed: _reset, child: const Text('重置')),
               ],
             ),
             const SizedBox(height: AppSpacing.md),
 
-            // 縣市（Requirement 5.12-13）
-            Text('服務地區', style: AppTypography.label),
+            // 服務標籤（從 API 動態載入）
+            const Text('服務標籤', style: AppTypography.label),
             const SizedBox(height: AppSpacing.xs),
-            Wrap(
-              spacing: AppSpacing.xs,
-              children: <Widget>[
-                for (final county in MockSeedData.counties)
-                  ChoiceChip(
-                    label: Text(county.$2),
-                    selected: _countyCode == county.$1,
-                    onSelected: (selected) {
-                      setState(() {
-                        _countyCode = selected ? county.$1 : null;
-                        _districtCode = null; // 切換縣市時清除行政區
-                      });
-                    },
-                  ),
-              ],
-            ),
-
-            // 行政區（依所選縣市過濾，Requirement 5.12）
-            if (districts.isNotEmpty) ...<Widget>[
-              const SizedBox(height: AppSpacing.sm),
-              Text('行政區', style: AppTypography.label),
-              const SizedBox(height: AppSpacing.xs),
-              Wrap(
-                spacing: AppSpacing.xs,
-                children: <Widget>[
-                  for (final district in districts)
-                    ChoiceChip(
-                      label: Text(district.$2),
-                      selected: _districtCode == district.$1,
-                      onSelected: (selected) {
-                        setState(() =>
-                            _districtCode = selected ? district.$1 : null);
-                      },
-                    ),
-                ],
+            labelsAsync.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                child: Center(
+                    child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )),
               ),
-            ],
-
-            // 標籤篩選（如：提供女技師、可帶寵物等）
-            const SizedBox(height: AppSpacing.md),
-            Text('服務標籤', style: AppTypography.label),
-            const SizedBox(height: AppSpacing.xs),
-            Wrap(
-              spacing: AppSpacing.xs,
-              runSpacing: AppSpacing.xxs,
-              children: <Widget>[
-                for (final tag in availableTags)
-                  FilterChip(
-                    label: Text(tag),
-                    selected: _selectedTags.contains(tag),
-                    onSelected: (selected) {
-                      setState(() {
-                        if (selected) {
-                          _selectedTags.add(tag);
-                        } else {
-                          _selectedTags.remove(tag);
-                        }
-                      });
-                    },
-                  ),
-              ],
+              error: (_, __) => const Text('標籤載入失敗'),
+              data: (labels) {
+                if (labels.isEmpty) {
+                  return Padding(
+                    padding:
+                        const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                    child: Text(
+                      '此服務類型沒有可篩選的標籤',
+                      style: AppTypography.caption.copyWith(
+                          color: Theme.of(context).colorScheme.outline),
+                    ),
+                  );
+                }
+                return Wrap(
+                  spacing: AppSpacing.xs,
+                  runSpacing: AppSpacing.xxs,
+                  children: <Widget>[
+                    for (final label in labels)
+                      FilterChip(
+                        label: Text(label.name),
+                        selected: _selectedTags.contains(label.id.toString()),
+                        onSelected: (selected) {
+                          setState(() {
+                            final idStr = label.id.toString();
+                            if (selected) {
+                              _selectedTags.add(idStr);
+                            } else {
+                              _selectedTags.remove(idStr);
+                            }
+                          });
+                        },
+                      ),
+                  ],
+                );
+              },
             ),
 
-            // 評分下限（Requirement 5.8：僅在後端提供評分欄位時顯示）
+            // 評分下限（僅在後端提供評分欄位時顯示）
             if (widget.capabilities.hasRating) ...<Widget>[
               const SizedBox(height: AppSpacing.md),
-              Text('最低評分', style: AppTypography.label),
+              const Text('最低評分', style: AppTypography.label),
               Slider(
                 value: _minRating ?? 0,
                 min: 0,
@@ -214,18 +172,17 @@ class _VendorFilterPanelState extends State<VendorFilterPanel> {
               ),
             ],
 
-            // 僅顯示可服務（Requirement 5.10）
-            if (widget.capabilities.hasAvailability) ...<Widget>[
+            // 僅顯示可服務
+            if (widget.capabilities.hasAvailability)
               SwitchListTile(
                 title: const Text('僅顯示目前可服務'),
                 value: _availableOnly,
                 onChanged: (v) => setState(() => _availableOnly = v),
               ),
-            ],
 
-            // 排序（Requirement 5.16）
+            // 排序
             const SizedBox(height: AppSpacing.md),
-            Text('排序方式', style: AppTypography.label),
+            const Text('排序方式', style: AppTypography.label),
             const SizedBox(height: AppSpacing.xs),
             Wrap(
               spacing: AppSpacing.xs,
