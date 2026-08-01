@@ -68,6 +68,101 @@ async def update_feedback_status(
     return resp.json()
 
 
+@router.get("/services/{service_id}/labels")
+async def get_service_labels(
+    service_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """查詢服務項目目前的標籤勾選狀態（給編輯頁面用）
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+
+    **輸出**：全部標籤清單，並標示此 service 目前是否已勾選
+    ```json
+    [
+      { "id": 1, "name": "寵物友善", "checked": true },
+      { "id": 2, "name": "24小時營業", "checked": false }
+    ]
+    ```
+
+    **說明**
+
+    給商家後台「編輯服務項目」頁面用：一次拿到所有可選標籤，
+    並直接標示哪些是此 service 已經有的，前端可以直接渲染成
+    已勾選/未勾選的 checkbox，不用自己再做比對。
+    """
+    labels_resp = await db_api.get("/labels", params={"limit": 200})
+    all_labels = labels_resp.json()["items"]
+
+    service_labels_resp = await db_api.get(
+        f"/services/{service_id}/labels", params={"limit": 200}
+    )
+    checked_label_ids = {item["label_id"] for item in service_labels_resp.json()["items"]}
+
+    return [
+        {"id": label["id"], "name": label["name"], "checked": label["id"] in checked_label_ids}
+        for label in all_labels
+    ]
+
+
+@router.put("/services/{service_id}/labels")
+async def set_service_labels(
+    service_id: int,
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """設定服務項目的標籤（覆蓋式）
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+    - body：
+    ```json
+    { "label_ids": [1, 3, 5] }
+    ```
+    傳入完整的標籤 id 清單，會**取代**該 service 原有的全部標籤
+    （不在清單內的既有標籤會被移除，新出現的會被新增）。
+
+    **輸出**：更新後的完整標籤清單，格式同 `GET .../labels`
+    ```json
+    [
+      { "id": 1, "name": "寵物友善", "checked": true },
+      { "id": 2, "name": "24小時營業", "checked": false }
+    ]
+    ```
+
+    **說明**
+
+    給商家後台「編輯服務項目」頁面的儲存按鈕用。前端頁面載入時已用
+    `GET .../labels` 勾好現有標籤，使用者調整勾選後，把目前畫面上
+    所有「勾選中」的 label_id 整包傳過來即可，不需要自己算差異。
+    這裡會自動比對現有關聯，只新增/刪除有變動的部分
+    （api_server 本身沒有批次覆蓋的端點，逐筆呼叫組成）。
+    """
+    target_label_ids = set(payload.get("label_ids", []))
+
+    service_labels_resp = await db_api.get(
+        f"/services/{service_id}/labels", params={"limit": 200}
+    )
+    current_label_ids = {item["label_id"] for item in service_labels_resp.json()["items"]}
+
+    to_add = target_label_ids - current_label_ids
+    to_remove = current_label_ids - target_label_ids
+
+    for label_id in to_add:
+        await db_api.put(f"/services/{service_id}/labels/{label_id}")
+    for label_id in to_remove:
+        await db_api.delete(f"/services/{service_id}/labels/{label_id}")
+
+    labels_resp = await db_api.get("/labels", params={"limit": 200})
+    all_labels = labels_resp.json()["items"]
+
+    return [
+        {"id": label["id"], "name": label["name"], "checked": label["id"] in target_label_ids}
+        for label in all_labels
+    ]
+
+
 @router.post("/orders", status_code=201)
 async def create_order(
     payload: dict,
