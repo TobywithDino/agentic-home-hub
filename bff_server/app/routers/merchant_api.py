@@ -6,7 +6,7 @@
 這一層再去呼叫 api_server 拿資料，中間做排序、篩選、資料組裝等
 商家後台需要的邏輯。
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.client import DbApiClient
 from app.deps import get_db_api_client
@@ -641,6 +641,11 @@ async def create_form_with_content(
     `service_id`（必填）：此表單要綁定到哪個服務項目，建立成功後會自動
     把該 service 的 `form_id` 欄位更新為此表單的 id。
 
+    ⚠️ 一個 service 只能對應一張表單：若該 `service_id` 現有的
+    `form_id` 已不是 `null`（代表已經有表單），會直接回 409，
+    不會建立新表單。若要換表單，請先用 `PATCH /forms/{form_id}`
+    更新既有表單內容，而不是呼叫這支重新建立。
+
     **輸出**：建立後的完整巢狀表單物件
     ```json
     {
@@ -672,6 +677,16 @@ async def create_form_with_content(
     題目建立失敗），前面已成功建立的表單/題組不會自動回滾，需要另外
     刪除清理。這是巢狀組裝 API 目前的已知限制。
     """
+    service_id = payload["service_id"]
+
+    # 檢查此 service 是否已經有表單，不允許一個 service 對應多張表單
+    service_resp = await db_api.get(f"/services/{service_id}")
+    if service_resp.json().get("form_id") is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"service_id={service_id} 已經有對應的表單，一個服務項目不能建立多張表單",
+        )
+
     form_resp = await db_api.post("/forms", json=payload.get("form", {}))
     form = form_resp.json()
     form_id = form["id"]
@@ -708,8 +723,7 @@ async def create_form_with_content(
 
     form["groups"] = groups_out
 
-    # 把此表單的 form_id 寫回對應的 service（必填）
-    service_id = payload["service_id"]
+    # 把此表單的 form_id 寫回對應的 service
     await db_api.patch(f"/services/{service_id}", json={"form_id": form_id})
 
     return form
