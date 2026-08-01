@@ -1,6 +1,6 @@
 # database/ — DB 架構與種子資料說明
 
-本資料夾是資料庫 DDL、種子資料、建置腳本的唯一權威來源。此文件說明整體架構（16張表、彼此關係）以及每張表的欄位有沒有對應的種子資料值，方便開發時知道哪些欄位可以直接拿現成資料測試、哪些欄位是空的需要自己補。
+本資料夾是資料庫 DDL、種子資料、建置腳本的唯一權威來源。此文件說明整體架構（18張表、彼此關係）以及每張表的欄位有沒有對應的種子資料值，方便開發時知道哪些欄位可以直接拿現成資料測試、哪些欄位是空的需要自己補。
 
 > 完整的建置步驟（Docker啟動、跑腳本、預期輸出）見 `../部署手冊.md` 第3章。API 端點與這些表的對應關係見 `../API_Reference.md`。
 
@@ -15,7 +15,7 @@
 
 ## 1. 整體架構
 
-16 張表分成 7 個功能群組，彼此用「值相等」關聯（**沒有實體 FOREIGN KEY 約束**，是刻意的鬆耦合設計，跨表一致性由應用層負責）：
+18 張表分成 8 個功能群組，彼此用「值相等」關聯（**沒有實體 FOREIGN KEY 約束**，是刻意的鬆耦合設計，跨表一致性由應用層負責）：
 
 ```
 sys_county ──county_code── sys_district
@@ -40,12 +40,17 @@ pms_form（表單主檔）──form_id──┬── pms_form_group（題組�
                                 └── pms_form_feedback（表單回饋，使用者填單後的紀錄）
 
 mms_order_record（訂單主檔）──record_id── mms_order_review（訂單評價，1:0..1，PK共用）
+                                              │
+                                        service_id/service_vendor_id聚合(應用層計算,非FK)
+                                              │
+                        mms_review_summary_service（服務項目評價AI摘要，1個service_id僅存最新1筆）
+                        mms_review_summary_vendor（供應商整合評價AI摘要，1個service_vendor_id僅存最新1筆）
 ```
 
 **跨群組關聯**（皆為值相等，非FK）：
 - `user_accounts.id` == `mms_order_record.inbr_account_id` == `pms_form_feedback.inbr_account_id` == `mms_order_review.inbr_account_id`
-- `cms_homepage_service_vendor.id` == `cms_homepage_service.service_vendor_id` == `vendor_accounts.service_vendor_id` == `pms_form.service_vendor_id` == `mms_order_record.service_vendor_id` == `mms_order_review.service_vendor_id`
-- `cms_homepage_service.id` == `service_label.service_id` == `mms_order_record.service_id` == `pms_form_feedback.service_id` == `mms_order_review.service_id`
+- `cms_homepage_service_vendor.id` == `cms_homepage_service.service_vendor_id` == `vendor_accounts.service_vendor_id` == `pms_form.service_vendor_id` == `mms_order_record.service_vendor_id` == `mms_order_review.service_vendor_id` == `mms_review_summary_service.service_vendor_id` == `mms_review_summary_vendor.service_vendor_id`
+- `cms_homepage_service.id` == `service_label.service_id` == `mms_order_record.service_id` == `pms_form_feedback.service_id` == `mms_order_review.service_id` == `mms_review_summary_service.service_id`
 
 ## 2. 各表詳細說明與種子資料覆蓋率
 
@@ -203,6 +208,35 @@ mms_order_record（訂單主檔）──record_id── mms_order_review（訂�
 
 5筆評價對應的訂單：`record_id` 2010/2023/2025/2026/2027，皆為`order_status='80'`（已完成）且插入評價後`comment_status`已同步改為`'02'`。評分分布：3~5星（vendor_id=1有4筆，平均4.0分；vendor_id=11有1筆，5.0分），刻意涵蓋不同分數區間方便測試`AVG()`聚合查詢。
 
+### I. 評價AI摘要（`mms_review_summary.sql`，新增功能，目前無種子資料）
+
+彙整 `mms_order_review` 的內容生成AI摘要，供使用者/供應商在不同顆粒度查看。兩張表皆為「覆寫式快取」設計：同一個`service_id`/`service_vendor_id`只保留最新1筆摘要，重新生成時直接覆蓋，不留歷史版本。目前種子資料未涵蓋（需實際呼叫LLM生成，非靜態範例資料），API server 實作時可用既有5筆`mms_order_review`種子資料手動觸發生成測試。
+
+**`mms_review_summary_service`**（PK: `service_id`，與`cms_homepage_service.id`共用值，非獨立序列）— 服務項目評價AI摘要，面向使用者與供應商共用同一份內容
+
+| 欄位 | 說明 |
+|---|---|
+| `service_id` | 服務項目ID，本表PK |
+| `service_vendor_id` | 服務提供商ID，冗餘欄位 |
+| `summary_content` | AI生成的摘要文字 |
+| `summary_highlights` | 結構化重點，JSON，例如`{"pros":[...],"cons":[...]}` |
+| `sentiment_stats` | 情感分布統計，JSON，例如`{"positive":12,"neutral":3,"negative":2}` |
+| `source_review_count` | 本次摘要納入計算的評價筆數 |
+| `source_avg_rating` | 納入計算的評價平均分數快取 |
+| `latest_review_cre_time` | 納入計算的最新一筆評價建立時間，用於判斷摘要是否過期 |
+| `ai_model` | 生成本筆摘要所用的AI模型名稱/版本 |
+| `generate_status` | 生成狀態，`00`待生成/`01`生成中/`02`已完成/`03`失敗 |
+| `generate_time` | 本次摘要生成完成時間 |
+| `error_message` | 生成失敗時的錯誤訊息 |
+| `is_deleted`/`cre_id`/`cre_time`/`upd_id`/`upd_time` | 標準刪除註記/操作者/時間戳欄位 |
+
+**`mms_review_summary_vendor`**（PK: `service_vendor_id`，與`cms_homepage_service_vendor.id`共用值）— 供應商整合評價AI摘要，僅供供應商後台使用，橫跨其名下所有服務彙整
+
+欄位大致與`mms_review_summary_service`相同，額外差異：
+- 無`service_id`/`service_vendor_id`冗餘欄位分離（本表PK直接就是`service_vendor_id`）
+- 多一個`service_breakdown`欄位：各服務項目的簡易統計快取，JSON陣列，例如`[{"service_id":1,"review_count":10,"avg_rating":4.5}]`，避免前端需另外逐一查詢`mms_review_summary_service`
+- `source_review_count`/`source_avg_rating`為跨全部服務項目的加總/平均
+
 ## 3. 種子資料檔案對照
 
 | 檔案 | 對應表 | 筆數 |
@@ -213,8 +247,9 @@ mms_order_record（訂單主檔）──record_id── mms_order_review（訂�
 | `諮詢單相關範例資料.json` | `pms_form`, `pms_form_group`, `pms_form_topic`, `pms_topic_media`, `pms_topic_option`, `pms_topic_county_district_relation`, `pms_form_feedback` | 1+3+7+1+6+1+1 |
 | `order_record範例資料.json`（`.csv`為同內容備用格式） | `mms_order_record` | 99 |
 | `order_review範例資料.json` | `mms_order_review` | 5 |
+| （無，`mms_review_summary.sql`僅建表，AI摘要為執行期生成，非種子資料） | `mms_review_summary_service`, `mms_review_summary_vendor` | 0 |
 
-**匯入順序**（`import_seed_data.py`自動處理，見`../部署手冊.md`第3.3節）：DDL建表 → 主檔種子資料（縣市/服務商/帳號/表單） → 交易資料（訂單/評價，依賴主檔先存在） → 校正serial主鍵序列。
+**匯入順序**（`import_seed_data.py`自動處理，見`../部署手冊.md`第3.3節）：DDL建表（含`mms_review_summary.sql`，排在`mms_order_review.sql`之後） → 主檔種子資料（縣市/服務商/帳號/表單） → 交易資料（訂單/評價，依賴主檔先存在） → 校正serial主鍵序列。
 
 ## 4. 已知的資料完整性限制
 

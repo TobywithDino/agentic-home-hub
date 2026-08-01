@@ -44,6 +44,7 @@ DDL_FILES = [
     "諮詢單相關table.sql",           # pms_form 系列
     "mms_order_record.sql",          # mms_order_record
     "mms_order_review.sql",          # mms_order_review（訂單評價單，新增）
+    "mms_review_summary.sql",        # mms_review_summary_service, mms_review_summary_vendor（評價AI摘要，新增，依賴mms_order_review先存在）
 ]
 
 # Step 2：主檔種子資料（依 README 建議順序 + 新增表插入正確位置）
