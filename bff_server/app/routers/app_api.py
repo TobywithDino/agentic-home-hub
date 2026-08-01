@@ -92,12 +92,16 @@ async def find_vendors_by_service(
 @router.get("/vendors/{service_vendor_id}/services")
 async def list_vendor_services(
     service_vendor_id: int,
+    service_type: str | None = None,
     db_api: DbApiClient = Depends(get_db_api_client),
 ):
-    """取得某個廠商提供的所有服務項目
+    """取得某個廠商提供的服務項目（可依服務類型篩選）
 
     **輸入**
     - `service_vendor_id` (path, int): 服務商 ID（從 `find_vendors_by_service` 回傳的 `id` 取得）
+    - `service_type` (query, string, 可選): 服務類型代碼，只回傳該類型的服務。
+      1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物。
+      不傳則回傳該 vendor 名下全部服務項目。
 
     **輸出**：服務項目陣列
     ```json
@@ -115,10 +119,14 @@ async def list_vendor_services(
 
     **說明**
 
-    前端在找到廠商後，點進廠商詳情頁時呼叫此 API 取得該廠商的所有服務項目
-    （不限 service_type，回傳該 vendor 名下全部 service）。
+    前端在找到廠商後，點進廠商詳情頁時呼叫此 API 取得該廠商的服務項目。
+    可透過 `service_type` 參數篩選特定類型（例如只看水電修繕），
+    不傳則回傳全部。
     """
-    resp = await db_api.get("/services", params={"service_vendor_id": service_vendor_id, "limit": 200})
+    params: dict = {"service_vendor_id": service_vendor_id, "limit": 200}
+    if service_type is not None:
+        params["type"] = service_type
+    resp = await db_api.get("/services", params=params)
     return resp.json()["items"]
 
 
