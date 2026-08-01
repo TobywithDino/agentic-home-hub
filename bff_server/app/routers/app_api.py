@@ -389,6 +389,42 @@ async def get_service_reviews(
     return reviews
 
 
+@router.get("/users/{inbr_account_id}")
+async def get_member_profile(
+    inbr_account_id: str,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得會員個人資訊
+
+    **輸入**
+    - `inbr_account_id` (path, uuid): 會員 UUID，登入時取得
+
+    **輸出**
+    ```json
+    {
+      "id": "019c0464-2d01-73f0-9f9b-d1392fdb941a",
+      "account": "user01@example.com",
+      "contact_name": "王小明",
+      "contact_mobile": "0912345678",
+      "contact_email": "user01@example.com",
+      "is_2fa_enabled": "0",
+      "last_login_time": "...",
+      "is_enable": "1",
+      "is_deleted": "0",
+      "upd_time": "...",
+      "cre_time": "..."
+    }
+    ```
+
+    **說明**
+
+    取得會員的帳號與聯絡資訊，供 APP 端「個人資料」頁面顯示。
+    個資欄位（姓名、手機、Email）已由 api_server 解密後回傳明文。
+    """
+    resp = await db_api.get(f"/users/{inbr_account_id}")
+    return resp.json()
+
+
 @router.patch("/users/{inbr_account_id}")
 async def update_member_profile(
     inbr_account_id: str,
