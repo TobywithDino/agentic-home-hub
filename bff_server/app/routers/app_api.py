@@ -251,6 +251,61 @@ async def update_order_review(
     return resp.json()
 
 
+@router.get("/services/{service_id}/reviews")
+async def get_service_reviews(
+    service_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某個服務項目底下全部訂單的評價（完整內容）
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+
+    **輸出**：評價物件陣列（不分頁，一次回傳全部）
+    ```json
+    [
+      {
+        "record_id": 1, "order_no": "...", "service_vendor_id": 1, "service_id": 17,
+        "inbr_account_id": "...", "overall_rating": 5,
+        "rating_detail": { "service": 5, "attitude": 4 },
+        "review_content": "服務很好，準時到府", "media": ["https://.../photo1.jpg"],
+        "status": "01", "is_deleted": false, "cre_time": "...", "upd_time": "..."
+      }
+    ]
+    ```
+    每筆欄位對應 `mms_order_review` 完整內容（`ReviewOut`），**不是**
+    公開評價牆的精簡格式，包含 `inbr_account_id`、`order_no` 等內部欄位。
+
+    **說明**
+
+    給 APP 端查看某個服務項目全部評價用（範圍限定單一服務項目，
+    不含同商家的其他服務）。
+
+    api_server 沒有「直接依 service_id 查完整評價」的端點——現成的
+    `GET /services/{service_id}/reviews` 是公開評價牆，回傳精簡過的
+    `PublicReviewOut`（刻意排除 `inbr_account_id`/`order_no`/
+    `service_vendor_id`/`status` 等欄位，避免對外洩漏身分/內部資訊）。
+    這裡改用以下組合取得完整欄位：
+    1. `GET /services/{service_id}` 查出該服務所屬的 `service_vendor_id`
+    2. `GET /vendors/{service_vendor_id}/reviews?service_id={service_id}`
+       （帶 service_id 篩選）並自動分頁抓取到底
+
+    ⚠️ 安全提醒：此端點回傳完整評價內容（含 `inbr_account_id`、
+    `order_no`），目前平台無身分驗證機制，任何知道 `service_id` 的人
+    都能呼叫並取得評價者身分關聯資訊。若前端只是要做「服務評價瀏覽」
+    這種公開頁面，建議改呼叫 api_server 現成的公開評價牆端點
+    `GET /services/{service_id}/reviews`（回傳去識別化的 `PublicReviewOut`），
+    而不是這支。
+    """
+    service_resp = await db_api.get(f"/services/{service_id}")
+    service_vendor_id = service_resp.json()["service_vendor_id"]
+
+    reviews = await db_api.get_all_items(
+        f"/vendors/{service_vendor_id}/reviews", params={"service_id": service_id}
+    )
+    return reviews
+
+
 @router.patch("/users/{inbr_account_id}")
 async def update_member_profile(
     inbr_account_id: str,

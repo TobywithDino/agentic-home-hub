@@ -551,6 +551,43 @@ async def create_order(
     return order
 
 
+@router.get("/vendors/{service_vendor_id}/reviews")
+async def get_vendor_reviews(
+    service_vendor_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得該商家「所有服務項目」底下全部訂單的評價（完整內容）
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID
+
+    **輸出**：評價物件陣列（不分頁，一次回傳全部）
+    ```json
+    [
+      {
+        "record_id": 1, "order_no": "...", "service_vendor_id": 1, "service_id": 17,
+        "inbr_account_id": "...", "overall_rating": 5,
+        "rating_detail": { "service": 5, "attitude": 4 },
+        "review_content": "服務很好，準時到府", "media": ["https://.../photo1.jpg"],
+        "status": "01", "is_deleted": false, "cre_time": "...", "upd_time": "..."
+      }
+    ]
+    ```
+    每筆欄位對應 `mms_order_review` 完整內容（`ReviewOut`），
+    非公開評價牆的精簡格式，包含 `inbr_account_id`、`order_no` 等內部欄位。
+
+    **說明**
+
+    給商家後台批次查看自己名下全部評價用（例如彙整評分、篩選負評、
+    統計關鍵字）。內部呼叫 api_server 的
+    `GET /vendors/{service_vendor_id}/reviews`，該端點本身涵蓋此商家
+    名下**所有服務項目**的評價，並自動處理分頁（`limit`/`offset`）
+    迴圈抓取到底，一次回傳完整清單，不需要呼叫端自己處理分頁。
+    """
+    reviews = await db_api.get_all_items(f"/vendors/{service_vendor_id}/reviews")
+    return reviews
+
+
 @router.get("/vendors/{service_vendor_id}/orders")
 async def list_orders(
     service_vendor_id: int,

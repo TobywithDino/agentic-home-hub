@@ -13,6 +13,7 @@
   - [查看會員的訂單總覽](#get-app-apiusersinbr_account_idorders-overview)
   - [對已完成訂單提交評價](#post-app-apiordersrecord_idreview)
   - [修改自己提交過的評價](#patch-app-apiusersinbr_account_idordersrecord_idreview)
+  - [取得某服務項目全部評價](#get-app-apiservicesservice_idreviews)
   - [設定會員個人資訊](#patch-app-apiusersinbr_account_id)
   - [APP 會員登入](#post-app-apiauthlogin)
 - [商家後台（merchant_api.py，prefix: `/merchant-api`）](#商家後台-merchant_apipy-prefix-merchant-api)
@@ -20,6 +21,7 @@
   - [更新諮詢回饋單狀態](#patch-merchant-apifeedbacksfeedback_nostatus)
   - [查詢服務項目的標籤勾選狀態](#get-merchant-apiservicesservice_idlabels)
   - [設定服務項目的標籤（覆蓋式）](#put-merchant-apiservicesservice_idlabels)
+  - [取得該商家全部評價](#get-merchant-apivendorsservice_vendor_idreviews)
   - [取得該商家所有表單清單](#get-merchant-apivendorsservice_vendor_idforms)
   - [取得某張表單的完整內容](#get-merchant-apiformsform_idfull)
   - [更新表單完整內容（差異比對式）](#patch-merchant-apiformsform_id)
@@ -181,6 +183,21 @@
 
 ---
 
+### `GET /app-api/services/{service_id}/reviews`
+
+取得某個服務項目底下全部訂單的評價（完整內容）
+
+**輸入**
+- `service_id` (path, int)：服務項目 ID
+
+**輸出**：評價物件陣列（不分頁，一次回傳全部），每筆對應 `mms_order_review` 完整內容（`ReviewOut`），**不是**公開評價牆的精簡格式，包含 `inbr_account_id`、`order_no` 等內部欄位。
+
+**說明**：查看某個服務項目全部評價（範圍限定單一服務項目，不含同商家的其他服務）。api_server 沒有「直接依 service_id 查完整評價」的端點，這裡改用組合查詢：先 `GET /services/{service_id}` 查出所屬 `service_vendor_id`，再 `GET /vendors/{service_vendor_id}/reviews?service_id={service_id}` 並自動分頁抓取到底。
+
+⚠️ 安全提醒：此端點回傳完整評價內容（含 `inbr_account_id`、`order_no`），目前平台無身分驗證機制，任何知道 `service_id` 的人都能取得評價者身分關聯資訊。若只是要做公開的「服務評價瀏覽」頁面，建議改呼叫 api_server 現成的公開評價牆端點 `GET /services/{service_id}/reviews`（回傳去識別化的 `PublicReviewOut`），而不是這支。
+
+---
+
 ### `PATCH /app-api/users/{inbr_account_id}`
 
 設定（更新）會員個人資訊
@@ -289,6 +306,19 @@ APP 會員登入
 **輸出**：更新後的完整標籤清單，格式同 `GET .../labels`
 
 **說明**：給商家後台「編輯服務項目」頁面的儲存按鈕用。前端頁面載入時已用 `GET .../labels` 勾好現有標籤，使用者調整勾選後，把目前畫面上所有「勾選中」的 label_id 整包傳過來即可，不需要自己算差異。這裡會自動比對現有關聯，只新增/刪除有變動的部分（api_server 本身沒有批次覆蓋的端點，逐筆呼叫組成）。
+
+---
+
+### `GET /merchant-api/vendors/{service_vendor_id}/reviews`
+
+取得該商家「所有服務項目」底下全部訂單的評價（完整內容）
+
+**輸入**
+- `service_vendor_id` (path, int)：服務商 ID
+
+**輸出**：評價物件陣列（不分頁，一次回傳全部），每筆對應 `mms_order_review` 完整內容（`ReviewOut`），非公開評價牆的精簡格式，包含 `inbr_account_id`、`order_no` 等內部欄位。
+
+**說明**：給商家後台批次查看自己名下全部評價用（例如彙整評分、篩選負評、統計關鍵字）。內部呼叫 api_server 的 `GET /vendors/{service_vendor_id}/reviews`，該端點涵蓋此商家名下**所有服務項目**的評價，並自動處理分頁（`limit`/`offset`）迴圈抓取到底，一次回傳完整清單。
 
 ---
 
