@@ -240,6 +240,7 @@ mms_order_record（訂單主檔）──record_id── mms_order_review（訂�
 |---|---|
 | `service_id` | 服務項目ID，本表PK |
 | `service_vendor_id` | 服務提供商ID，冗餘欄位 |
+| `service_name` | 服務項目名稱快取(對應`cms_homepage_service.name`)，避免前端/後台需另外查主檔才能顯示名稱 |
 | `summary_content` | AI生成的摘要文字 |
 | `summary_highlights` | 結構化重點，JSON，例如`{"pros":[...],"cons":[...]}` |
 | `sentiment_stats` | 情感分布統計，JSON，例如`{"positive":12,"neutral":3,"negative":2}` |
@@ -256,6 +257,7 @@ mms_order_record（訂單主檔）──record_id── mms_order_review（訂�
 
 欄位大致與`mms_review_summary_service`相同，額外差異：
 - 無`service_id`/`service_vendor_id`冗餘欄位分離（本表PK直接就是`service_vendor_id`）
+- 多一個`vendor_name`欄位：服務提供商名稱快取(對應`cms_homepage_service_vendor.name`)，同`mms_review_summary_service.service_name`的設計理由
 - 多一個`service_breakdown`欄位：各服務項目的簡易統計快取，JSON陣列，例如`[{"service_id":1,"review_count":10,"avg_rating":4.5}]`，避免前端需另外逐一查詢`mms_review_summary_service`
 - `source_review_count`/`source_avg_rating`為跨全部服務項目的加總/平均
 

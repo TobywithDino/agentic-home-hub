@@ -378,6 +378,7 @@ erDiagram
     mms_review_summary_service {
         int service_id PK "與cms_homepage_service.id共用值"
         int service_vendor_id FK "冗餘欄位"
+        string service_name "名稱快取"
         text summary_content
         jsonb summary_highlights
         jsonb sentiment_stats
@@ -400,6 +401,7 @@ erDiagram
 
     mms_review_summary_vendor {
         int service_vendor_id PK "與cms_homepage_service_vendor.id共用值"
+        string vendor_name "名稱快取"
         text summary_content
         jsonb summary_highlights
         jsonb sentiment_stats

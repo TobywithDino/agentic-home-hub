@@ -29,6 +29,7 @@ from app.database import get_db
 from app.deps import PageParams, page_params
 from app.models import (
     CmsHomepageService,
+    CmsHomepageServiceVendor,
     MmsOrderReview,
     MmsReviewSummaryService,
     MmsReviewSummaryVendor,
@@ -80,6 +81,7 @@ def build_service_summary_out(obj: MmsReviewSummaryService, db: Session) -> Serv
     stale = _is_stale(current_count, current_max_time, obj.source_review_count, obj.latest_review_cre_time)
     return ServiceReviewSummaryOut(
         service_id=obj.service_id, service_vendor_id=obj.service_vendor_id,
+        service_name=obj.service_name,
         summary_content=obj.summary_content, summary_highlights=obj.summary_highlights,
         sentiment_stats=obj.sentiment_stats, source_review_count=obj.source_review_count,
         source_avg_rating=float(obj.source_avg_rating) if obj.source_avg_rating is not None else None,
@@ -94,7 +96,8 @@ def build_vendor_summary_out(obj: MmsReviewSummaryVendor, db: Session) -> Vendor
     current_count, current_max_time = _vendor_review_aggregate(db, obj.service_vendor_id)
     stale = _is_stale(current_count, current_max_time, obj.source_review_count, obj.latest_review_cre_time)
     return VendorReviewSummaryOut(
-        service_vendor_id=obj.service_vendor_id, summary_content=obj.summary_content,
+        service_vendor_id=obj.service_vendor_id, vendor_name=obj.vendor_name,
+        summary_content=obj.summary_content,
         summary_highlights=obj.summary_highlights, sentiment_stats=obj.sentiment_stats,
         service_breakdown=obj.service_breakdown, source_review_count=obj.source_review_count,
         source_avg_rating=float(obj.source_avg_rating) if obj.source_avg_rating is not None else None,
@@ -141,6 +144,7 @@ def upsert_service_review_summary(
     if obj is None:
         obj = MmsReviewSummaryService(
             service_id=service_id, service_vendor_id=payload.service_vendor_id,
+            service_name=payload.service_name,
             summary_content=payload.summary_content, summary_highlights=payload.summary_highlights,
             sentiment_stats=payload.sentiment_stats, source_review_count=payload.source_review_count,
             source_avg_rating=payload.source_avg_rating, latest_review_cre_time=payload.latest_review_cre_time,
@@ -152,6 +156,7 @@ def upsert_service_review_summary(
         response.status_code = 201
     else:
         obj.service_vendor_id = payload.service_vendor_id
+        obj.service_name = payload.service_name
         obj.summary_content = payload.summary_content
         obj.summary_highlights = payload.summary_highlights
         obj.sentiment_stats = payload.sentiment_stats
@@ -177,7 +182,7 @@ def update_service_review_summary_status(
 ):
     """僅更新生成狀態。目標key尚無記錄時自動建立殼記錄（其餘欄位皆為null），
     讓生成流程能在呼叫LLM前先標記01生成中，不用等LLM回應才第一次寫資料。
-    殼記錄的 service_vendor_id 由 cms_homepage_service 查得（值相等關聯，非FK）。"""
+    殼記錄的 service_vendor_id/service_name 由 cms_homepage_service 查得（值相等關聯，非FK）。"""
     now = now_utc()
     obj = db.get(MmsReviewSummaryService, service_id)
     if obj is None:
@@ -186,6 +191,7 @@ def update_service_review_summary_status(
             raise HTTPException(status_code=404, detail="服務項目不存在，無法建立摘要殼記錄")
         obj = MmsReviewSummaryService(
             service_id=service_id, service_vendor_id=service.service_vendor_id,
+            service_name=service.name,
             summary_content=None, summary_highlights=None, sentiment_stats=None,
             source_review_count=0, source_avg_rating=None, latest_review_cre_time=None,
             ai_model=None, generate_status=payload.generate_status, generate_time=None,
@@ -252,7 +258,8 @@ def upsert_vendor_review_summary(
     obj = db.get(MmsReviewSummaryVendor, service_vendor_id)
     if obj is None:
         obj = MmsReviewSummaryVendor(
-            service_vendor_id=service_vendor_id, summary_content=payload.summary_content,
+            service_vendor_id=service_vendor_id, vendor_name=payload.vendor_name,
+            summary_content=payload.summary_content,
             summary_highlights=payload.summary_highlights, sentiment_stats=payload.sentiment_stats,
             service_breakdown=payload.service_breakdown, source_review_count=payload.source_review_count,
             source_avg_rating=payload.source_avg_rating, latest_review_cre_time=payload.latest_review_cre_time,
@@ -263,6 +270,7 @@ def upsert_vendor_review_summary(
         db.add(obj)
         response.status_code = 201
     else:
+        obj.vendor_name = payload.vendor_name
         obj.summary_content = payload.summary_content
         obj.summary_highlights = payload.summary_highlights
         obj.sentiment_stats = payload.sentiment_stats
@@ -287,12 +295,17 @@ def upsert_vendor_review_summary(
 def update_vendor_review_summary_status(
     service_vendor_id: int, payload: ReviewSummaryStatusUpdate, db: Session = Depends(get_db)
 ):
-    """僅更新生成狀態。目標key尚無記錄時自動建立殼記錄（其餘欄位皆為null）。"""
+    """僅更新生成狀態。目標key尚無記錄時自動建立殼記錄（其餘欄位皆為null）。
+    殼記錄的 vendor_name 由 cms_homepage_service_vendor 查得（值相等關聯，非FK）。"""
     now = now_utc()
     obj = db.get(MmsReviewSummaryVendor, service_vendor_id)
     if obj is None:
+        vendor = db.get(CmsHomepageServiceVendor, service_vendor_id)
+        if vendor is None:
+            raise HTTPException(status_code=404, detail="服務提供商不存在，無法建立摘要殼記錄")
         obj = MmsReviewSummaryVendor(
-            service_vendor_id=service_vendor_id, summary_content=None, summary_highlights=None,
+            service_vendor_id=service_vendor_id, vendor_name=vendor.name,
+            summary_content=None, summary_highlights=None,
             sentiment_stats=None, service_breakdown=None, source_review_count=0,
             source_avg_rating=None, latest_review_cre_time=None, ai_model=None,
             generate_status=payload.generate_status, generate_time=None,

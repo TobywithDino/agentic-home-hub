@@ -393,6 +393,7 @@ class MmsReviewSummaryService(Base):
 
     service_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
     service_vendor_id: Mapped[int] = mapped_column(Integer)
+    service_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     summary_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_highlights: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     sentiment_stats: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -417,6 +418,7 @@ class MmsReviewSummaryVendor(Base):
     __tablename__ = "mms_review_summary_vendor"
 
     service_vendor_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    vendor_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
     summary_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_highlights: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     sentiment_stats: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
