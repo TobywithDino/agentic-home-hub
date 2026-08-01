@@ -8,6 +8,7 @@ import 'package:ai_butler_app/design_system/components/async_value_widget.dart';
 import 'package:ai_butler_app/design_system/components/skeletons.dart';
 import 'package:ai_butler_app/design_system/components/service_category_tile.dart';
 import 'package:ai_butler_app/design_system/theme_extensions.dart';
+import 'package:ai_butler_app/domain/models/domain_models.dart';
 import 'package:ai_butler_app/providers/catalog_providers.dart';
 import 'package:ai_butler_app/providers/session_providers.dart';
 import 'package:ai_butler_app/router/routes.dart';
@@ -39,22 +40,27 @@ class HomeScreen extends ConsumerWidget {
               const SizedBox(height: AppSpacing.lg),
               const Text('服務項目', style: AppTypography.title),
               const SizedBox(height: AppSpacing.sm),
-              AsyncValueWidget<List<dynamic>>(
+              AsyncValueWidget<List<ServiceCategory>>(
                 value: categoriesAsync,
                 skeleton: const SkeletonList(
                     itemCount: 1, itemBuilder: _skeletonGrid),
                 onRetry: () => ref.invalidate(serviceCategoriesProvider),
-                data: (categories) => GridView.count(
-                  crossAxisCount: 4,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  mainAxisSpacing: AppSpacing.sm,
+                data: (categories) => Wrap(
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.md,
                   children: <Widget>[
                     for (final category in categories)
-                      ServiceCategoryTile(
-                        category: category,
-                        onTap: () => context.push(
-                          '${Routes.vendors}?serviceId=${category.serviceId}',
+                      SizedBox(
+                        width: (MediaQuery.of(context).size.width -
+                                AppSpacing.md * 2 -
+                                AppSpacing.sm * 3) /
+                            4,
+                        child: ServiceCategoryTile(
+                          key: ValueKey(category.serviceId),
+                          category: category,
+                          onTap: () => context.push(
+                            '${Routes.vendors}?serviceId=${category.serviceId}',
+                          ),
                         ),
                       ),
                   ],

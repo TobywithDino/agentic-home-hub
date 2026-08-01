@@ -9,6 +9,7 @@ import 'package:ai_butler_app/data/remote/http_auth_repository.dart';
 import 'package:ai_butler_app/data/remote/http_feedback_repository.dart';
 import 'package:ai_butler_app/data/remote/http_form_repository.dart';
 import 'package:ai_butler_app/data/remote/http_order_repository.dart';
+import 'package:ai_butler_app/data/remote/http_review_repository.dart';
 import 'package:ai_butler_app/data/remote/http_vendor_repository.dart';
 import 'package:ai_butler_app/domain/repositories/repositories.dart';
 
@@ -22,9 +23,6 @@ final apiClientProvider = Provider<ApiClient>((ref) {
   final config = ref.watch(environmentConfigProvider);
   return ApiClient(baseUrl: config.effectiveBaseUrl);
 });
-
-/// DB Access API base URL（port 8000），表單等 BFF 未暴露的端點走這裡。
-const String _dbAccessBaseUrl = 'http://52.10.163.115:8000';
 
 /// SharedPreferences provider — 啟動時由 main() 覆寫。
 /// 放在這裡讓 repository_providers 和 session_providers 都能使用，
@@ -88,7 +86,7 @@ final formRepositoryProvider = Provider<FormRepository>((ref) {
   final config = ref.watch(environmentConfigProvider);
   return switch (config.dataSource) {
     DataSource.mock => MockFormRepository(),
-    DataSource.remote => HttpFormRepository(dbAccessBaseUrl: _dbAccessBaseUrl),
+    DataSource.remote => HttpFormRepository(ref.watch(apiClientProvider)),
   };
 });
 
@@ -108,6 +106,17 @@ final orderRepositoryProvider = Provider<OrderRepository>((ref) {
   return switch (config.dataSource) {
     DataSource.mock => MockOrderRepository(),
     DataSource.remote => HttpOrderRepository(
+        ref.watch(apiClientProvider),
+        getAccountId: () => _readAccountId(ref),
+      ),
+  };
+});
+
+final reviewRepositoryProvider = Provider<ReviewRepository>((ref) {
+  final config = ref.watch(environmentConfigProvider);
+  return switch (config.dataSource) {
+    DataSource.mock => MockReviewRepository(),
+    DataSource.remote => HttpReviewRepository(
         ref.watch(apiClientProvider),
         getAccountId: () => _readAccountId(ref),
       ),

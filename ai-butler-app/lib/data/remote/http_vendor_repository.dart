@@ -30,10 +30,8 @@ class HttpServiceCatalogRepository implements ServiceCatalogRepository {
 
   @override
   Future<List<ServiceCategory>> fetchCategories() async {
-    final categories = <ServiceCategory>[];
-
-    for (final cat in _knownCategories) {
-      // 嘗試取得各類別的服務商列表以計算 vendorCount
+    // 並行呼叫所有類別的 vendors API 取得 vendorCount，大幅加速載入
+    final futures = _knownCategories.map((cat) async {
       int vendorCount = 0;
       try {
         final response = await _client.get<List<dynamic>>(
@@ -43,16 +41,15 @@ class HttpServiceCatalogRepository implements ServiceCatalogRepository {
       } catch (_) {
         // 若某類別取得失敗，仍回傳該類別但數量為 0
       }
-
-      categories.add(ServiceCategory(
+      return ServiceCategory(
         serviceId: int.tryParse(cat.type) ?? 0,
         type: cat.type,
         name: cat.name,
         vendorCount: vendorCount,
-      ));
-    }
+      );
+    });
 
-    return categories;
+    return Future.wait(futures);
   }
 }
 
@@ -119,10 +116,9 @@ class HttpVendorRepository implements VendorRepository {
 
   @override
   Future<VendorDetail> fetchVendorDetail(int vendorId) async {
-    // BFF 沒有單獨的 vendor detail 端點，
-    // 需要遍歷各類別找到對應的 vendor。
-    // 暫時用已知類別去搜尋，找到後回傳 detail。
-    for (final type in ['1', '2', '3', '6', '9', '10', '11']) {
+    // 並行查詢所有類別，找到包含此 vendorId 的結果
+    const types = ['1', '2', '3', '6', '9', '10', '11'];
+    final futures = types.map((type) async {
       try {
         final response = await _client.get<List<dynamic>>(
           ApiEndpoints.vendorsByServiceType(type),
@@ -134,10 +130,14 @@ class HttpVendorRepository implements VendorRepository {
             return _mapVendorDetail(map, type);
           }
         }
-      } catch (_) {
-        continue;
-      }
-    }
+      } catch (_) {}
+      return null;
+    });
+
+    final results = await Future.wait(futures);
+    final detail = results.firstWhere((d) => d != null, orElse: () => null);
+    if (detail != null) return detail;
+
     throw const ServerError(
       message: '找不到服務商',
       endpoint: 'fetchVendorDetail',
@@ -170,9 +170,11 @@ class HttpVendorRepository implements VendorRepository {
       name: json['name'] as String? ?? '',
       description: json['description'] as String? ?? '',
       imgUrl: firstService['img_url'] as String? ?? '',
-      formId: firstService['id'] as int? ?? 0,
-      serviceId: int.tryParse(serviceType) ?? 0,
-      introContent: json['description'] as String? ?? '',
+      formId: firstService['form_id'] as int? ?? 0,
+      serviceId: firstService['id'] as int? ?? (int.tryParse(serviceType) ?? 0),
+      introContent: firstService['description'] as String? ??
+          json['description'] as String? ??
+          '',
     );
   }
 }

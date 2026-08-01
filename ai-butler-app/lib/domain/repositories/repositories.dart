@@ -47,3 +47,21 @@ abstract interface class FeedbackRepository {
 abstract interface class OrderRepository {
   Future<OrderInbox> fetchInbox();
 }
+
+/// 10. 訂單評價（對應後端「建立/修改/查看評價」）。
+abstract interface class ReviewRepository {
+  /// 對已完成的訂單提交評價。
+  Future<OrderReview> createReview({
+    required int recordId,
+    required ReviewDraft draft,
+  });
+
+  /// 修改自己對某筆訂單提交過的評價。
+  Future<OrderReview> updateReview({
+    required int recordId,
+    required ReviewDraft draft,
+  });
+
+  /// 取得某個服務項目底下全部訂單的評價。
+  Future<List<OrderReview>> fetchServiceReviews(int serviceId);
+}

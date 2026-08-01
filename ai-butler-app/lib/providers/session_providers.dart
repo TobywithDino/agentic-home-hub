@@ -60,13 +60,13 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
-  /// 現場 demo 快速登入（Requirement 1.10）。
-  Future<bool> quickDemoLogin() =>
-      login(account: 'smarthome_user_aug2026', password: 'SmartHome2026!');
-
   Future<void> logout() async {
     await ref.read(sessionStoreProvider).clear();
     await ref.read(authRepositoryProvider).logout();
+    // 延遲一個 microtask 再更新狀態，讓 widget tree 在 GoRouter redirect
+    // 觸發前完成當前 frame 的處理，避免 StatefulShellRoute 的
+    // _dependents.isEmpty assertion 錯誤。
+    await Future<void>.microtask(() {});
     state = const AuthState();
   }
 

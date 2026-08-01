@@ -20,11 +20,15 @@ import 'package:ai_butler_app/router/transitions.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
-/// 監聽登入狀態變化，驅動 [GoRouter] 重新計算 redirect（Requirement 2.5-9）。
+/// 監聯登入狀態變化，驅動 [GoRouter] 重新計算 redirect（Requirement 2.5-9）。
 class _AuthListenable extends ChangeNotifier {
   _AuthListenable(this._ref) {
     _ref.listen<AuthState>(authNotifierProvider, (previous, next) {
-      if (previous?.isLoggedIn != next.isLoggedIn) notifyListeners();
+      if (previous?.isLoggedIn != next.isLoggedIn) {
+        // 延遲通知讓 widget tree 在當前 frame 完成 dispose，
+        // 避免 StatefulShellRoute 的 _dependents.isEmpty assertion。
+        Future<void>.microtask(notifyListeners);
+      }
     });
   }
 
