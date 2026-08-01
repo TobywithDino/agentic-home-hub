@@ -209,6 +209,8 @@ aws ssm send-command --profile agentic-home-hub --region us-west-2 --instance-id
 
 拿到 `CommandId` 後用第4.3節的方式查執行結果，看到 `"Status": "Success"` 且 `Active: active (running)` 就代表部署成功。
 
+> ⚠️ **絕對不要對 `api_server/`、`database/`、`bff_server/` 這幾個目錄本身執行 `rm -rf`（例如 `rm -rf api_server database` 想「先清乾淨再解壓」）**。`tar -xzf` 本身就會覆蓋同名檔案，完全不需要先清空目錄；`rm -rf` 整個目錄會連同**只存在 EC2 上、從未進版控、沒有任何備份**的 `api_server/.env`（含 RDS 密碼、PII 加密金鑰）一起刪掉，且刪掉後這些機密**救不回來**（PII 金鑰遺失後，舊加密資料永久解不開）。真正需要清的只有 `.pyc`/`__pycache__` 這類編譯快取，上面指令裡的 `rm -rf api_server/app/__pycache__ api_server/app/routers/__pycache__` 這兩行已經夠用，不要自己加更大範圍的清空指令。曾經真的手滑刪過一次，事故經過見 `Database/鬼故事_誤刪env事件.md`。
+
 ⚠️ 這個流程只更新 `database/` 和 `api_server/` 程式碼本身，**不會**重跑 `import_seed_data.py`（資料庫結構/種子資料不會被動到）。如果這次更新有改到 DDL 或需要跑資料庫遷移，要另外處理，不在這個腳本範圍內。
 
 驗證更新後端點數量有沒有變化（目前應該是 78 個）：

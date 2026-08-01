@@ -115,6 +115,8 @@ agentic-home-hub/
 
 ⚠️ 這是 workshop 臨時帳號（AWS Workshop Studio），沒有身分驗證機制、沒有 HTTPS，資源可能隨時被回收。不要把 IP 或憑證分享到帳號外部。
 
+⚠️ **EC2 部署安全規則（僅適用於透過 SSM 對 EC2 執行的部署/維運指令，不影響本機開發時的一般檔案操作）**：絕對不要對 EC2 上的 `/home/ssm-user/aiwave/api_server/`、`/home/ssm-user/aiwave/database/`、`/home/ssm-user/aiwave/bff_server/` 這三個目錄本身執行 `rm -rf`（例如想「先清乾淨再解壓新版」）。這些目錄裡混著 git 追蹤的程式碼與**只存在 EC2 上、從未進版控、沒有任何備份**的機密設定檔（例如 `api_server/.env` 存 RDS 密碼與 PII 加密金鑰），整體刪除會連同機密一起銷毀，且部分後果不可逆（PII 金鑰遺失後舊加密資料永久解不開）。`tar -xzf` 本身就會覆蓋同名檔案，重新部署不需要先清空目錄；真正該清的只有 `__pycache__`/`*.pyc` 這類編譯快取（精準指定路徑刪除，例如 `rm -rf api_server/app/__pycache__`），不要擴大範圍。事故經過見 `Database/鬼故事_誤刪env事件.md`。
+
 ## 部署 bff_server 更新
 
 ⚠️ `bff_server/deploy.sh` 已被移出版控（commit `4f453dc chore: untrack`，推測因含 EC2 IP / instance id / S3 bucket 而 repo 要公開）。
