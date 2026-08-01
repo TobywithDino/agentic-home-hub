@@ -144,12 +144,14 @@ class LabelCreate(BaseModel):
     name: str = Field(max_length=50)
     sort: int = 0
     is_enable: str = "1"
+    service_type: str | None = Field(default=None, max_length=2)
 
 
 class LabelUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=50)
     sort: int | None = None
     is_enable: str | None = None
+    service_type: str | None = Field(default=None, max_length=2)
 
 
 class LabelOut(BaseModel):
@@ -163,6 +165,7 @@ class LabelOut(BaseModel):
     cre_time: dt.datetime
     upd_id: uuid.UUID | None
     cre_id: uuid.UUID
+    service_type: str | None
 
 
 class ServiceLabelOut(BaseModel):

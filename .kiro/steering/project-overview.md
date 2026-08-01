@@ -27,7 +27,7 @@ agentic-home-hub/
 │       ├── review_utils.py   共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
 │       └── routers/
 │           ├── app_api.py       APP 前端呼叫的 11 支 API
-│           └── merchant_api.py  商家後台呼叫的 14 支 API
+│           └── merchant_api.py  商家後台呼叫的 16 支 API
 ├── agent_service/            我方負責：AI 管家（AgentCore Runtime，CodeZip 部署，不用 Docker）
 │   ├── agentcore/
 │   │   ├── agentcore.json    宣告式設定：runtime + memory（源頭真相，別改生成的 CDK）
@@ -153,7 +153,7 @@ agentcore logs               # 看 runtime 日誌
 - **cms_homepage_service_vendor**：服務商主檔（`id`, `name`, `description`）
 - **cms_homepage_service**：服務項目主檔，`type` 欄位代表服務類型：
   1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物。`form_id`（新增，nullable，對應`pms_form.id`）指定該服務項目對應哪張諮詢表單，解決「查某個service要對應到哪張form」的查詢缺口（原設計只有`pms_form.service_vendor_id`反向關聯，無法從單一service_id直接查到表單）。多個service可共用同一`form_id`；`NULL`代表尚未設定專屬表單；跟`pms_form`本身供B端/客服/轉訂單流程使用的通用表單無關，那些表單不透過此欄位查詢。
-- **label / service_label**：標籤主檔 + 服務項目與標籤的多對多關聯表
+- **label / service_label**：標籤主檔 + 服務項目與標籤的多對多關聯表。`label.service_type`（新增，nullable，對應`cms_homepage_service.type`）：`NULL`=通用標籤（適用所有服務類型，例如寵物友善/24小時營業）；有值=該服務類型專屬標籤（例如`type=6`餐廳訂位專屬的中餐廳/泰式料理），各service type自行維護自己的標籤，不要求跨type共用。名稱唯一性範圍縮小為同一`service_type`內（`UNIQUE(service_type, name)`），通用標籤另用partial unique index保證全域唯一。`GET /labels`可用`service_type` query參數篩選，回傳「通用+該類型專屬」標籤聯集。
 - **user_accounts / vendor_accounts**：會員 / 商家後台登入帳號（密碼 bcrypt 雜湊，個資 AES-256-GCM 加密存 `bytea`，同時有明文欄位對應的 `_hash` 欄位可查詢比對）
 - **mms_order_record**：訂單/訂位統一紀錄表
 - **mms_order_review**：訂單評價，`record_id` 直接沿用對應 `mms_order_record.record_id`（1:0..1，無獨立序列），一筆訂單至多一筆評價由 PK 天然保證。新增評價會同步把訂單的 `comment_status` 改成 `02`。`GET /services/{service_id}/reviews` 是全平台唯一不需身分驗證即可呼叫的公開端點（評價牆，回傳精簡過的 `PublicReviewOut`）。bff_server 所有回傳訂單的端點（`view_orders`、`list_orders`、`create_order`、`update_order`）都會用 `review_utils.py` 把對應評價併入訂單物件的 `review` 欄位（沒評價過則為 `null`），前端不需要另外呼叫評價 API。使用者提交評價走 `app_api.py` 的 `POST /orders/{record_id}/review`，修改評價走 `PATCH /users/{inbr_account_id}/orders/{record_id}/review`（皆為轉發 api_server，業務規則如訂單須完成、身分比對、防重複皆由 api_server 驗證）。批次查詢完整評價（回傳未經裁切的 `ReviewOut` 完整欄位，用 `client.py` 的 `get_all_items` 自動處理分頁抓取全部資料）：商家視角在 `merchant_api.py` 的 `GET /vendors/{id}/reviews`，APP 端依服務項目查詢在 `app_api.py` 的 `GET /services/{id}/reviews`（注意跟 api_server 同名的公開評價牆端點不同，這支回傳含身分關聯的完整內容，不適合當公開頁面用）

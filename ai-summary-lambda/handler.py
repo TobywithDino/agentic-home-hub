@@ -179,20 +179,17 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
 # ── BFF HTTP calls ────────────────────────────────────────────────────────────
 
 def _fetch_all_services() -> tuple[list[int], dict[int, str]]:
-    """從 api_server（透過 bff 的底層 port 8000）拉出所有服務項目 id 與名稱。"""
-    # bff 沒有「列全部服務」的端點，直接打 api_server
-    api_server_base = BFF_BASE_URL.replace(":8100", ":8000")
+    """從 bff_server GET /merchant-api/services 拉出所有服務項目 id 與名稱。"""
     try:
         resp = httpx.get(
-            f"{api_server_base}/services",
-            params={"limit": 200},
+            f"{BFF_BASE_URL}/merchant-api/services",
             timeout=30,
         )
         resp.raise_for_status()
-        items = resp.json().get("items", [])
+        items = resp.json()
         service_ids = [item["id"] for item in items]
         service_names = {item["id"]: item.get("name", f"Service {item['id']}") for item in items}
-        logger.info("Fetched %d services from api_server", len(service_ids))
+        logger.info("Fetched %d services from bff_server", len(service_ids))
         return service_ids, service_names
     except Exception as e:
         logger.error("Failed to fetch services: %s", e)
@@ -200,19 +197,17 @@ def _fetch_all_services() -> tuple[list[int], dict[int, str]]:
 
 
 def _fetch_all_vendors() -> tuple[list[int], dict[int, str]]:
-    """從 api_server 拉出所有服務商 id 與名稱。"""
-    api_server_base = BFF_BASE_URL.replace(":8100", ":8000")
+    """從 bff_server GET /merchant-api/vendors 拉出所有服務商 id 與名稱。"""
     try:
         resp = httpx.get(
-            f"{api_server_base}/service-vendors",
-            params={"limit": 200},
+            f"{BFF_BASE_URL}/merchant-api/vendors",
             timeout=30,
         )
         resp.raise_for_status()
-        items = resp.json().get("items", [])
+        items = resp.json()
         vendor_ids = [item["id"] for item in items]
         vendor_names = {item["id"]: item.get("name", f"Vendor {item['id']}") for item in items}
-        logger.info("Fetched %d vendors from api_server", len(vendor_ids))
+        logger.info("Fetched %d vendors from bff_server", len(vendor_ids))
         return vendor_ids, vendor_names
     except Exception as e:
         logger.error("Failed to fetch vendors: %s", e)
