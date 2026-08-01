@@ -360,3 +360,104 @@ class OrderInbox {
 
   static const OrderInbox empty = OrderInbox();
 }
+
+// === 訂單評價 ===
+
+/// 建立/修改評價時的輸入資料。
+@immutable
+class ReviewDraft {
+  const ReviewDraft({
+    required this.inbrAccountId,
+    required this.overallRating,
+    this.ratingDetail = const <String, int>{},
+    this.reviewContent = '',
+    this.media = const <String>[],
+  });
+
+  final String inbrAccountId;
+
+  /// 總評分 1~5。
+  final int overallRating;
+
+  /// 細項評分，例如 {"service": 5, "attitude": 4}。
+  final Map<String, int> ratingDetail;
+
+  /// 文字評價內容。
+  final String reviewContent;
+
+  /// 附加媒體 URL 列表。
+  final List<String> media;
+}
+
+/// 後端回傳的完整評價物件。
+@immutable
+class OrderReview {
+  const OrderReview({
+    required this.recordId,
+    required this.orderNo,
+    required this.serviceVendorId,
+    required this.serviceId,
+    required this.inbrAccountId,
+    required this.overallRating,
+    this.ratingDetail = const <String, int>{},
+    this.reviewContent = '',
+    this.media = const <String>[],
+    this.status = '01',
+    this.isDeleted = false,
+    this.creTime,
+    this.updTime,
+  });
+
+  final int recordId;
+  final String orderNo;
+  final int serviceVendorId;
+  final int serviceId;
+  final String inbrAccountId;
+  final int overallRating;
+  final Map<String, int> ratingDetail;
+  final String reviewContent;
+  final List<String> media;
+
+  /// '01' = 正常
+  final String status;
+  final bool isDeleted;
+  final DateTime? creTime;
+  final DateTime? updTime;
+
+  factory OrderReview.fromJson(Map<String, dynamic> json) {
+    return OrderReview(
+      recordId: json['record_id'] as int? ?? 0,
+      orderNo: json['order_no'] as String? ?? '',
+      serviceVendorId: json['service_vendor_id'] as int? ?? 0,
+      serviceId: json['service_id'] as int? ?? 0,
+      inbrAccountId: json['inbr_account_id'] as String? ?? '',
+      overallRating: json['overall_rating'] as int? ?? 0,
+      ratingDetail: _parseRatingDetail(json['rating_detail']),
+      reviewContent: json['review_content'] as String? ?? '',
+      media: _parseStringList(json['media']),
+      status: json['status'] as String? ?? '01',
+      isDeleted: json['is_deleted'] as bool? ?? false,
+      creTime: _parseDateTime(json['cre_time']),
+      updTime: _parseDateTime(json['upd_time']),
+    );
+  }
+
+  static Map<String, int> _parseRatingDetail(dynamic raw) {
+    if (raw is Map<String, dynamic>) {
+      return raw.map((k, v) => MapEntry(k, (v as num?)?.toInt() ?? 0));
+    }
+    return const <String, int>{};
+  }
+
+  static List<String> _parseStringList(dynamic raw) {
+    if (raw is List) {
+      return raw.map((e) => e.toString()).toList();
+    }
+    return const <String>[];
+  }
+
+  static DateTime? _parseDateTime(dynamic raw) {
+    if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
+    return null;
+  }
+}

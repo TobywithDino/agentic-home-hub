@@ -20,18 +20,15 @@ class HttpAccountRepository implements AccountRepository {
   Future<MemberProfile> fetchProfile() async {
     final accountId = getAccountId();
 
-    // BFF 的 PATCH 回傳完整 user，傳空 body 即可取得目前資料
-    // 注意：如果 BFF 不允許空 PATCH，可改用 DB Access GET /users/{id}
-    final response = await _client.patch<Map<String, dynamic>>(
+    final response = await _client.get<Map<String, dynamic>>(
       ApiEndpoints.updateUser(accountId),
-      data: <String, dynamic>{},
     );
 
     final body = response.data;
     if (body == null) {
       throw const ServerError(
         message: '取得會員資訊失敗',
-        endpoint: 'PATCH /app-api/users/{id}',
+        endpoint: 'GET /app-api/users/{id}',
       );
     }
 

@@ -31,7 +31,20 @@ class ApiEndpoints {
   static String ordersOverview(String inbrAccountId) =>
       '/app-api/users/$inbrAccountId/orders-overview';
 
-  // === 10. 照片預簽章上傳 ===
+  // === 10. 訂單評價 ===
+  // POST /app-api/orders/{record_id}/review — 建立評價
+  static String createReview(int recordId) =>
+      '/app-api/orders/$recordId/review';
+
+  // PATCH /app-api/users/{inbr_account_id}/orders/{record_id}/review — 修改評價
+  static String updateReview(String inbrAccountId, int recordId) =>
+      '/app-api/users/$inbrAccountId/orders/$recordId/review';
+
+  // GET /app-api/services/{service_id}/reviews — 查看某服務的全部評價
+  static String serviceReviews(int serviceId) =>
+      '/app-api/services/$serviceId/reviews';
+
+  // === 11. 照片預簽章上傳 ===
   // TODO(backend): 確認預簽章回應欄位（期望 {upload_url, file_id}）
   static const String mediaPresign = '/media/presign';
 
