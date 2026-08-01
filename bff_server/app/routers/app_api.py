@@ -148,6 +148,53 @@ async def find_vendors_by_service(
     return vendors
 
 
+@router.get("/labels")
+async def list_labels_by_service_type(
+    service_type: str | None = None,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得標籤清單（該服務類型專屬標籤 + 通用標籤）
+
+    **輸入**
+    - `service_type` (query, string, 可選): 服務類型代碼。
+      1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物
+      - **有帶值**：回傳該類型專屬標籤 + 通用標籤
+      - **不帶（省略或空字串）**：只回傳通用標籤
+
+    **輸出**：標籤陣列（依 `sort` 排序）
+    ```json
+    [
+      { "id": 1, "name": "寵物友善" },
+      { "id": 2, "name": "24小時營業" }
+    ]
+    ```
+
+    **說明**
+
+    `label` 表本身有 `service_type` 欄位：`null` 代表通用標籤（適用所有
+    服務類型，例如「寵物友善」、「24小時營業」），有值則是該服務類型
+    專屬標籤（例如「中餐廳」、「泰式料理」只屬於餐廳訂位類型 `6`）。
+
+    通用標籤（`service_type` 為 `null`）**不論參數為何一定會回傳**；
+    有帶 `service_type` 時，額外加上該類型的專屬標籤。使用者選好服務
+    類型後，前端呼叫此端點取得可用標籤渲染成篩選選項，勾選後把 label id
+    用逗號串起來傳給
+    `GET /app-api/service-types/{service_type}/vendors?labels=3,5` 做篩選。
+
+    這裡呼叫 `GET /labels`（不帶篩選，取全部）後在此層過濾，
+    標籤資料量小（demo 種子資料僅 8 筆），全撈回來過濾成本可忽略。
+    """
+    resp = await db_api.get("/labels", params={"limit": 200})
+    all_labels = resp.json()["items"]
+
+    matched = [
+        label for label in all_labels
+        if label["service_type"] is None or label["service_type"] == service_type
+    ]
+
+    return [{"id": label["id"], "name": label["name"]} for label in matched]
+
+
 @router.get("/vendors/{service_vendor_id}/services")
 async def list_vendor_services(
     service_vendor_id: int,
@@ -191,6 +238,57 @@ async def list_vendor_services(
         params["type"] = service_type
     resp = await db_api.get("/services", params=params)
     return resp.json()["items"]
+
+
+@router.get("/services/{service_id}/labels")
+async def get_service_labels(
+    service_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某個服務項目擁有的標籤
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+
+    **輸出**：該服務項目擁有的標籤陣列（只含實際擁有的，依 `sort` 排序）
+    ```json
+    [
+      { "id": 3, "name": "專業認證" },
+      { "id": 5, "name": "到府服務" }
+    ]
+    ```
+    沒有任何標籤時回傳空陣列 `[]`。
+
+    **說明**
+
+    APP 端顯示服務項目詳情時，用來渲染該服務的標籤（例如卡片上的
+    「專業認證」、「到府服務」等標記）。
+
+    `service_label` 關聯表只存 `service_id` + `label_id`，沒有標籤名稱，
+    因此這裡組合兩支 api_server 端點取得可顯示的內容：
+    1. `GET /services/{service_id}/labels` 取得此服務的 label_id 清單
+    2. `GET /labels` 取得標籤主檔，對應出名稱並過濾掉未擁有的標籤
+
+    與商家後台同路徑的端點（`GET /merchant-api/services/{id}/labels`）不同：
+    那支回傳「全部標籤 + `checked` 狀態」供編輯頁勾選用，這支只回傳
+    該服務實際擁有的標籤，適合直接顯示。
+    """
+    service_labels_resp = await db_api.get(
+        f"/services/{service_id}/labels", params={"limit": 200}
+    )
+    owned_label_ids = {item["label_id"] for item in service_labels_resp.json()["items"]}
+
+    if not owned_label_ids:
+        return []
+
+    labels_resp = await db_api.get("/labels", params={"limit": 200})
+    all_labels = labels_resp.json()["items"]
+
+    return [
+        {"id": label["id"], "name": label["name"]}
+        for label in all_labels
+        if label["id"] in owned_label_ids
+    ]
 
 
 @router.get("/forms/{form_id}/full")

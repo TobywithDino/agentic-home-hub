@@ -13,8 +13,13 @@ agentic-home-hub/
 ├── Database/                隊友負責：資料庫 + DB Access API
 │   ├── 部署手冊.md            本機建置 + AWS 遷移完整手冊
 │   ├── AWS操作手冊.md         目前 AWS 環境連線/操作指南（EC2 IP、SSM 連線方式等）
-│   ├── API_Reference.md      api_server 94 個端點完整規格
+│   ├── API_Reference.md      api_server 端點完整規格
+│   ├── patch_test_pii.ps1    一次性腳本：補寫種子測試帳號（user01~04/vendor01~03）的PII明文，
+│   │                         用法見AWS操作手冊.md「5.1」（需先設定PII_ENCRYPTION_KEY_B64並重啟aiwave-api）
 │   ├── database/             DDL（*.sql）+ 種子資料（*.json）+ 建置腳本
+│   │   └── schema.mmd        資料庫ER圖原始碼（Mermaid erDiagram），配套schema_mermaid.svg/.png
+│   │                         取代舊newDBstruct.jpg；可直接貼進支援Mermaid的Markdown原生渲染
+│   │                         重新產圖用 `npx @mermaid-js/mermaid-cli -i schema.mmd -o schema_mermaid.svg`
 │   └── api_server/           FastAPI，直接操作 PostgreSQL，跑在 EC2 8000 埠
 │       └── app/routers/      geo / catalog / accounts / forms / feedbacks / orders / reviews / summaries
 ├── bff_server/               我方負責：BFF（Backend For Frontend）
@@ -25,9 +30,10 @@ agentic-home-hub/
 │       │                     （含 get_optional 把 404 當空值、get_all_items 自動分頁抓全部）
 │       ├── config.py         環境變數設定
 │       ├── review_utils.py   共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
+│       ├── agent_client.py   呼叫 AgentCore Runtime 並轉發 SSE（用 EC2 role 做 SigV4）
 │       └── routers/
-│           ├── app_api.py       APP 前端呼叫的 11 支 API
-│           └── merchant_api.py  商家後台呼叫的 16 支 API
+│           ├── app_api.py       APP 前端呼叫的 API（含 AI 管家 SSE）
+│           └── merchant_api.py  商家後台呼叫的 API
 ├── agent_service/            我方負責：AI 管家（AgentCore Runtime，CodeZip 部署，不用 Docker）
 │   ├── agentcore/
 │   │   ├── agentcore.json    宣告式設定：runtime + memory（源頭真相，別改生成的 CDK）
@@ -49,9 +55,12 @@ agentic-home-hub/
 │       ├── config.py         環境變數設定
 │       └── Dockerfile        備用：想切換成 Container build 才需要
 ├── ai-butler-app/            隊友負責：Flutter APP 本體（含 AI 管家聊天畫面）
+│   └── lib/
+│       ├── data/remote/http_butler_ai_service.dart  打 bff_server 的 SSE，映射成 ButlerChunk
+│       └── providers/ai_providers.dart              AI_SOURCE=remote 時切換到上面那支
 ├── ai-summary-lambda/        隊友負責：評論摘要 Lambda（Bedrock 產生 mms_review_summary）
 ├── vendor-admin-web/         隊友負責：商家後台前端（React + Vite + Tailwind）
-└── flutter_ai_script/        我方負責：AI 管家的 Flutter 參考實作（待併入 ai-butler-app）
+└── flutter_ai_script/        我方負責：AI 管家的 Flutter 參考實作（教學導覽，待併入 ai-butler-app）
     └── lib/agent/
         ├── agent_client.dart      SSE 客戶端
         ├── agent_event.dart       SSE 事件模型（要跟 schemas.py 同步）
@@ -86,6 +95,7 @@ agentic-home-hub/
 1. `bff_server` 不直接碰資料庫，所有資料存取都透過呼叫 `Database/api_server` 完成。新增功能前先確認 `Database/api_server` 有沒有現成端點可以組合使用（見 `Database/API_Reference.md`），不要繞過這一層直接連 DB。
 2. `agent_service` 只打 `bff_server`，不直接打 `Database/api_server`，也不碰 DB。
 3. **AI 管家沒有寫入權限**。它只產生「草稿」，真正送出一定是 App 帶使用者身分打 `bff_server` 的既有端點。這讓模型幻覺無法造成錯誤訂單，也不用維護第二套 business rule。
+4. **前端不直接呼叫 AgentCore**。AgentCore Runtime 只接受 SigV4(IAM) 驗證，前端拿不到也不該拿 AWS 憑證，所以由 `bff_server` 的 `/app-api/butler/chat` 用 EC2 instance role 代為呼叫並轉發 SSE。
 
 ## 目前部署狀態（AWS）
 
@@ -106,9 +116,27 @@ agentic-home-hub/
 
 ## 部署 bff_server 更新
 
-⚠️ `bff_server/deploy.sh` 已在合併中被移除，目前沒有一鍵部署腳本。要部署得手動走：
-打包 → 上傳 S3 → SSM 送指令到 EC2 解壓、裝依賴、重啟 `bff-api` service → health check 驗證。
-需要 AWS 臨時憑證（跟保管人要）。要恢復腳本的話問一下當初刪除的隊友。
+⚠️ `bff_server/deploy.sh` 已被移出版控（commit `4f453dc chore: untrack`，推測因含 EC2 IP / instance id / S3 bucket 而 repo 要公開）。
+目前流程：打包 → 上傳 S3 → SSM 送指令到 EC2 解壓、`pip install -r requirements.txt`、重啟 `bff-api` service → health check。
+需要 AWS 臨時憑證（跟保管人要）。腳本內容問當初移除的隊友。
+
+**AI 管家（`/app-api/butler/chat`）上線前置條件**，三項缺一不可：
+
+1. **部署新程式碼**。`app/agent_client.py` 是新檔案、`requirements.txt` 多了 `boto3`，光複製程式碼不裝依賴會 ImportError 起不來。
+2. **EC2 instance role（`aiwave-ec2-ssm-role`）加權限**：
+   `bedrock-agentcore:InvokeAgentRuntime`，Resource 指向 `.../runtime/AgenticHomeHubButler_AiButler-*`。
+3. **EC2 上 `bff_server/.env` 加 `AGENTCORE_RUNTIME_ARN`**（用 `agentcore status --json` 取 `resourceType=agent` 的 `identifier`）。
+   程式碼刻意不寫死預設值：它含 AWS account id 而 repo 會公開。未設定時端點會回一筆 `error` 事件而不是崩掉。
+
+驗證（PowerShell 要用 `curl.exe`，`curl` 是 `Invoke-WebRequest` 的別名，不吃 `-H`/`-d`）：
+
+```powershell
+curl.exe -sS -N -X POST http://<EC2_IP>:8100/app-api/butler/chat `
+  -H "Content-Type: application/json" --data-binary @payload.json
+```
+
+該看到 `data: {"type":"text_delta",...}` 逐行冒出。若一次噴完就是有反向代理在緩衝
+（程式已送 `X-Accel-Buffering: no`，nginx 可能還要 `proxy_buffering off`）。
 
 ## 部署 agent_service（AI 管家）
 
@@ -163,7 +191,7 @@ agentcore logs               # 看 runtime 日誌
   - `mms_review_summary_service`：PK為`service_id`（與`cms_homepage_service.id`共用值），彙整單一服務項目底下所有`mms_order_review`的AI摘要，面向使用者與供應商共用同一份內容。
   - `mms_review_summary_vendor`：PK為`service_vendor_id`，彙整供應商名下所有服務的評價，多一個`service_breakdown`欄位（JSON陣列快取各服務的評價數/平均分），僅供供應商後台使用。
   - 兩張表都有`generate_status`（`00`待生成/`01`生成中/`02`已完成/`03`失敗）與`latest_review_cre_time`欄位，用於支援非同步生成流程與判斷摘要是否過期需重新生成。
-  - `api_server/app/routers/summaries.py` 已實作對應的9支端點（`GET`/`PUT`/`PATCH .../status`/`DELETE`，服務項目與供應商各一組，供應商多一支清單端點），**只負責讀寫這兩張表，不呼叫LLM**，實際生成AI摘要內容的流程（呼叫Bedrock等模型）由上層服務負責再把結果`PUT`回來。`GET`回應含計算欄位`is_stale`（即時比對`mms_order_review`最新聚合值判斷摘要是否過期）。`bff_server`尚未有對應轉發端點。詳細規格見`Database/API_Reference.md`「I2. 評價AI摘要」章節。
+  - `api_server/app/routers/summaries.py` 已實作對應端點（`GET`/`PUT`/`PATCH .../status`/`DELETE`，服務項目與供應商各一組，供應商多一支清單端點），**只負責讀寫這兩張表，不呼叫LLM**，實際生成AI摘要內容的流程（呼叫Bedrock等模型）由上層服務負責再把結果`PUT`回來。`GET`回應含計算欄位`is_stale`（即時比對`mms_order_review`最新聚合值判斷摘要是否過期）。`bff_server`尚未有對應轉發端點。詳細規格見`Database/API_Reference.md`「I2. 評價AI摘要」章節。
 
 完整規格見 `Database/API_Reference.md` 和 `Database/database/*.sql` 的欄位註解（COMMENT ON COLUMN）。整體18張表的關係圖與逐欄位種子資料覆蓋狀況見 `Database/database/README.md`。
 
@@ -182,7 +210,12 @@ agentcore logs               # 看 runtime 日誌
 - **跨輪的 id 靠 `session_state.py` 帶**，不靠模型記憶。`memory.load_history` 只還原純文字不還原 toolResult（Converse API 要求 toolResult 必須配對同一輪的 toolUse），所以已解析的 `vendor_id` / `form_id` / `topic_id` 要另外渲染進系統提示。
 - **`_consume` 的 toolUse input 是分片抵達的 JSON 字串**，必須累積到 `contentBlockStop` 才能 parse，對單一 delta 做 `json.loads` 會隨機失敗。
 - **entrypoint 要 yield dict，不要自己格式化 SSE**。`BedrockAgentCoreApp._convert_to_sse` 會把每個 yield 的值包成 `data: {json}\n\n`；自己先包一次會變成雙重包裝，前端解不出來。這就是 `schemas.event()` 回傳 dict 而不是字串的原因。
-- 事件型別（`text_delta` / `tool_start` / `ui` / `draft` / `done` / `error`）改動時，`schemas.py` 和 `flutter_ai_script/lib/agent/agent_event.dart` 必須一起改。
+- 事件型別（`text_delta` / `tool_start` / `ui` / `draft` / `done` / `error`）改動時，這三處必須一起改：
+  `agent_service/.../schemas.py`、`ai-butler-app/lib/data/remote/http_butler_ai_service.dart`、
+  `flutter_ai_script/lib/agent/agent_event.dart`。
+- **bff_server 是原樣轉發 SSE，不重新組裝**。agent 端已經是 `data: {...}\n\n` 格式，重組只會讓兩邊協定不同步。
+- **前端切 SSE 不能靠 chunk 邊界**。TCP 會任意切割位元組，`http_butler_ai_service.dart` 的 `_sseLines` 用緩衝區累積到換行才算一行；把每個 chunk 當一筆事件會隨機解析失敗。
+- AI 管家的 `receiveTimeout` 要放寬到分鐘級（目前 3 分鐘）。`ApiClient` 預設 20 秒，但模型思考加多次 tool 往返很容易超過，所以那支 service 用自己的 Dio 實例。
 - `app/AiButler/` 內部是**平坦 import**（`from config import ...`），因為 codeLocation 目錄本身就是 package 根。不要寫成 `from app.config import ...`。
 - 本機開發時 `BFF_BASE_URL` 留空就走 `backend.py` 的內建假資料，不需要等後端就緒。
 
@@ -209,3 +242,8 @@ agentcore logs               # 看 runtime 日誌
 - 新增/修改 agent tool，或改動 SSE 事件協定
 
 更新時保持文件簡潔，只修改受影響的段落，不要整份重寫。
+
+**不要在本文件寫「幾支 API」「幾個端點」這類會隨時變動的計數。**
+實測這些數字在四次合併裡每次都跟實際不符，而且是 merge conflict 的主要來源。
+端點清單看 `bff_server/API.md` 與 `Database/API_Reference.md`，或直接數
+`@router` 裝飾器 / 打 `/openapi.json`。

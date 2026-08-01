@@ -15,6 +15,15 @@
 
 ## 1. 整體架構
 
+> 完整、含全部欄位型別的 ER 圖見 `schema.mmd`（Mermaid erDiagram原始碼）與渲染好的
+> `schema_mermaid.svg`/`schema_mermaid.png`。可直接把 `schema.mmd` 內容貼進支援
+> Mermaid 的 Markdown 檢視器（GitHub/Kiro等）原生渲染，不需要額外產圖步驟。
+> 改資料庫結構時請同步更新 `schema.mmd`，再用
+> `npx @mermaid-js/mermaid-cli -i schema.mmd -o schema_mermaid.svg` 重新產圖
+> （若要重新產PNG，注意需用mermaid-cli本身輸出而非其他SVG轉PNG工具，因為
+> 關聯線上的欄位標籤文字是用foreignObject/HTML渲染，多數輕量SVG轉PNG工具
+> 不支援foreignObject會導致標籤文字消失）。
+
 18 張表分成 8 個功能群組，彼此用「值相等」關聯（**沒有實體 FOREIGN KEY 約束**，是刻意的鬆耦合設計，跨表一致性由應用層負責）：
 
 ```

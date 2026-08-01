@@ -21,8 +21,8 @@ PostgreSQL (RDS)
 
 ## 目前狀態
 
-- `app_api.py`：APP 前端呼叫的 11 支 API
-- `merchant_api.py`：商家後台呼叫的 17 支 API
+- `app_api.py`：APP 前端呼叫的 13 支 API
+- `merchant_api.py`：商家後台呼叫的 20 支 API
 
 完整端點規格與範例見 `API.md`，或部署後開 Swagger UI (`/docs`) 互動測試。
 
@@ -62,8 +62,8 @@ app/
   main.py          FastAPI 應用程式入口
   review_utils.py  共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
   routers/
-    app_api.py       APP 前端呼叫的 11 支 API
-    merchant_api.py  商家後台呼叫的 17 支 API
+    app_api.py       APP 前端呼叫的 13 支 API
+    merchant_api.py  商家後台呼叫的 20 支 API
 ```
 
 ## 端點對應表
@@ -73,38 +73,43 @@ app/
 | # | Method | Path | 說明 |
 |---|--------|------|------|
 | 1 | GET | `/service-types/{service_type}/vendors` | 依服務類型+標籤篩選廠商 |
-| 2 | GET | `/vendors/{service_vendor_id}/services` | 廠商的服務項目（可用 service_type 篩選，回傳含 form_id） |
-| 3 | GET | `/forms/{form_id}/full` | 表單完整內容（題組/題目/選項），供填單頁渲染 |
-| 4 | POST | `/feedbacks` | 建立諮詢回饋單 |
-| 5 | GET | `/users/{inbr_account_id}/orders-overview` | 會員訂單總覽（未處理 feedback + 全部訂單含 review） |
-| 6 | POST | `/orders/{record_id}/review` | 對已完成訂單提交評價 |
-| 7 | PATCH | `/users/{inbr_account_id}/orders/{record_id}/review` | 修改自己提交過的評價 |
-| 8 | GET | `/services/{service_id}/reviews` | 某服務項目全部評價（完整內容，非公開評價牆） |
-| 9 | GET | `/users/{inbr_account_id}` | 取得會員個人資訊 |
-| 10 | PATCH | `/users/{inbr_account_id}` | 設定（更新）會員個人資訊 |
-| 11 | POST | `/auth/login` | APP 會員登入，回傳 inbr_account_id |
+| 2 | GET | `/labels?service_type=` | 依服務類型精確篩選標籤（帶值=該類型專屬，不帶=通用） |
+| 3 | GET | `/vendors/{service_vendor_id}/services` | 廠商的服務項目（可用 service_type 篩選，回傳含 form_id） |
+| 4 | GET | `/services/{service_id}/labels` | 某服務項目擁有的標籤（僅實際擁有的，供顯示用） |
+| 5 | GET | `/forms/{form_id}/full` | 表單完整內容（題組/題目/選項），供填單頁渲染 |
+| 6 | POST | `/feedbacks` | 建立諮詢回饋單 |
+| 7 | GET | `/users/{inbr_account_id}/orders-overview` | 會員訂單總覽（未處理 feedback + 全部訂單含 review） |
+| 8 | POST | `/orders/{record_id}/review` | 對已完成訂單提交評價 |
+| 9 | PATCH | `/users/{inbr_account_id}/orders/{record_id}/review` | 修改自己提交過的評價 |
+| 10 | GET | `/services/{service_id}/reviews` | 某服務項目全部評價（完整內容，非公開評價牆） |
+| 11 | GET | `/users/{inbr_account_id}` | 取得會員個人資訊 |
+| 12 | PATCH | `/users/{inbr_account_id}` | 設定（更新）會員個人資訊 |
+| 13 | POST | `/auth/login` | APP 會員登入，回傳 inbr_account_id |
 
 ### 商家後台（prefix: `/merchant-api`）
 
 | # | Method | Path | 說明 |
 |---|--------|------|------|
 | 1 | GET | `/services` | 查詢所有服務項目（可用 service_vendor_id, type 篩選） |
-| 2 | GET | `/vendors` | 查詢所有廠商 |
-| 3 | GET | `/vendors/{service_vendor_id}/services` | 該商家的服務項目（可用 service_type 篩選） |
-| 4 | GET | `/vendors/{service_vendor_id}/feedbacks` | 商家收到的諮詢回饋單清單 |
-| 5 | PATCH | `/feedbacks/{feedback_no}/status` | 更新回饋單狀態（已讀/處理進度） |
-| 6 | GET | `/services/{service_id}/labels` | 查詢標籤勾選狀態（全部標籤 + checked） |
-| 7 | PUT | `/services/{service_id}/labels` | 設定標籤（覆蓋式，自動 diff） |
-| 8 | GET | `/vendors/{service_vendor_id}/forms` | 該商家的表單清單（僅主檔） |
-| 9 | GET | `/forms/{form_id}/full` | 表單完整內容（題組/題目/選項/圖片/地區關聯） |
-| 10 | PATCH | `/forms/{form_id}` | 更新表單完整內容（差異比對式），必填 service_id |
-| 11 | POST | `/forms` | 建立表單及巢狀內容（題組→題目→選項），必填 service_id |
-| 12 | POST | `/orders` | 建立新訂單 |
-| 13 | GET | `/vendors/{service_vendor_id}/reviews` | 該商家全部評價（不分頁，一次回傳全部） |
-| 14 | GET | `/vendors/{service_vendor_id}/orders` | 該商家的訂單清單（含 review 欄位） |
-| 15 | PATCH | `/vendors/{service_vendor_id}/orders/{record_id}` | 更新特定訂單（狀態/金額/時間） |
-| 16 | PATCH | `/vendors/{service_vendor_id}` | 設定商家資訊（商家屬性 + 管理帳號聯絡方式） |
-| 17 | POST | `/auth/login` | 商家後台登入，回傳 service_vendor_id + account_id |
+| 2 | POST | `/services` | 新增服務項目（不傳 id 則自動分配） |
+| 3 | DELETE | `/services/{service_id}` | 刪除服務項目（實體刪除） |
+| 4 | GET | `/vendors` | 查詢所有廠商 |
+| 5 | GET | `/vendors/{service_vendor_id}/services` | 該商家的服務項目（可用 service_type 篩選） |
+| 6 | GET | `/vendors/{service_vendor_id}/feedbacks` | 商家收到的諮詢回饋單清單 |
+| 7 | PATCH | `/feedbacks/{feedback_no}/status` | 更新回饋單狀態（已讀/處理進度） |
+| 8 | GET | `/services/{service_id}/labels` | 查詢標籤勾選狀態（全部標籤 + checked） |
+| 9 | PUT | `/services/{service_id}/labels` | 設定標籤（覆蓋式，自動 diff） |
+| 10 | GET | `/vendors/{service_vendor_id}/forms` | 該商家的表單清單（僅主檔） |
+| 11 | GET | `/forms/{form_id}/full` | 表單完整內容（題組/題目/選項/圖片/地區關聯） |
+| 12 | PATCH | `/forms/{form_id}` | 更新表單完整內容（差異比對式），必填 service_id |
+| 13 | POST | `/forms` | 建立表單及巢狀內容（題組→題目→選項），必填 service_id |
+| 14 | POST | `/orders` | 建立新訂單 |
+| 15 | GET | `/vendors/{service_vendor_id}/reviews` | 該商家全部評價（不分頁，一次回傳全部） |
+| 16 | GET | `/vendors/{service_vendor_id}/orders` | 該商家的訂單清單（含 review 欄位） |
+| 17 | PATCH | `/vendors/{service_vendor_id}/orders/{record_id}` | 更新特定訂單（狀態/金額/時間） |
+| 18 | GET | `/vendors/{service_vendor_id}` | 取得商家資訊（商家屬性 + 管理帳號清單） |
+| 19 | PATCH | `/vendors/{service_vendor_id}` | 設定商家資訊（商家屬性 + 管理帳號聯絡方式） |
+| 20 | POST | `/auth/login` | 商家後台登入，回傳 service_vendor_id + account_id |
 
 ## 注意事項
 

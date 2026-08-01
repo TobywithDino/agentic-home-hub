@@ -6,13 +6,87 @@
 這一層再去呼叫 api_server 拿資料，中間做排序、篩選、資料組裝等
 商家後台需要的邏輯。
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.client import DbApiClient
 from app.deps import get_db_api_client
 from app.review_utils import attach_review_to_order, attach_reviews_to_orders
 
 router = APIRouter(prefix="/merchant-api", tags=["商家後台"])
+
+
+@router.post("/services", status_code=201)
+async def create_service(
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """商家新增一個服務項目
+
+    **輸入**（JSON body）
+    ```json
+    {
+      "service_vendor_id": 1,
+      "type": "10",
+      "name": "水電修繕-管線更換",
+      "img_url": "https://...(可選)",
+      "description": "服務項目描述(可選)",
+      "form_id": null
+    }
+    ```
+    - `service_vendor_id`（必填）：所屬服務商 ID
+    - `type`（必填）：服務類型代碼。
+      1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物
+    - `name`（必填）：服務項目名稱（最長 100 字元）
+    - `img_url`（可選）：服務項目圖片 URL
+    - `description`（可選）：服務項目說明
+    - `form_id`（可選）：對應的諮詢表單 ID，未設定時可省略或傳 null
+    - `id`（可選）：服務項目 ID。**不傳則自動分配**（取全平台目前最大 id + 1）；
+      若自行指定且已存在則回 409
+
+    **輸出**：建立後的完整服務項目物件（含實際使用的 `id`）
+
+    **說明**
+
+    商家後台新增一個服務項目。
+
+    `cms_homepage_service.id` 在資料庫是 `int4`（非 `serial4`），沒有自增序列，
+    api_server 的 `POST /services` 要求呼叫端自行指定 `id`。這裡在 BFF 層補上
+    自動分配：先查詢全平台現有服務項目取最大 id，加 1 作為新 id，前端不需要
+    自己想編號也不會撞號。
+
+    ⚠️ 自動分配是「查詢最大值 + 1」，非資料庫層級的序列，高併發同時新增
+    有極小機率算出同一個 id 而其中一筆收到 409。demo 階段可接受，
+    正式環境應改為資料庫層自增（把欄位改成 `serial4`）。
+    """
+    body = dict(payload)
+
+    if "id" not in body:
+        existing = await db_api.get_all_items("/services")
+        body["id"] = max((s["id"] for s in existing), default=0) + 1
+
+    resp = await db_api.post("/services", json=body)
+    return resp.json()
+
+
+@router.delete("/services/{service_id}", status_code=204)
+async def delete_service(
+    service_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """商家刪除一個服務項目
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+
+    **輸出**：無內容（HTTP 204）
+
+    **說明**
+
+    刪除指定的服務項目（實體刪除，此表無 is_deleted 欄位）。
+    刪除後該 service 底下的 label 關聯（`service_label`）不會自動清除
+    （資料庫無實體 FK），但已不影響查詢（查不到 service 就不會再被列出）。
+    """
+    await db_api.delete(f"/services/{service_id}")
 
 
 @router.get("/services")
@@ -160,7 +234,7 @@ async def update_feedback_status(
     - `feedback_no` (path, string): 回饋單編號
     - body：
     ```json
-    { "is_read": "0=未讀 1=已讀", "status": "0=未處理 1=處理中 2=已完成" }
+    { "is_read": "0=未讀 1=已讀", "status": "0=未處理 1=已完成 2=拒絕" }
     ```
 
     **輸出**：更新後的完整 feedback 物件
@@ -183,7 +257,8 @@ async def get_service_labels(
     **輸入**
     - `service_id` (path, int): 服務項目 ID
 
-    **輸出**：全部標籤清單，並標示此 service 目前是否已勾選
+    **輸出**：此服務類型的可選標籤清單（該類型專屬 + 通用標籤），
+    並標示此 service 目前是否已勾選
     ```json
     [
       { "id": 1, "name": "寵物友善", "checked": true },
@@ -193,12 +268,25 @@ async def get_service_labels(
 
     **說明**
 
-    給商家後台「編輯服務項目」頁面用：一次拿到所有可選標籤，
-    並直接標示哪些是此 service 已經有的，前端可以直接渲染成
-    已勾選/未勾選的 checkbox，不用自己再做比對。
+    給商家後台「編輯服務項目」頁面用。流程：
+    1. 先查此 `service_id` 對應的 `cms_homepage_service.type`（服務類型）
+    2. 取得可選標籤範圍：`label.service_type` 等於該類型的專屬標籤，
+       加上 `label.service_type` 為 `null` 的通用標籤（不會列出其他
+       服務類型專屬、跟此服務無關的標籤）
+    3. 對照此 service 現有的 `service_label` 關聯，標示 `checked`
+
+    前端可以直接渲染成已勾選/未勾選的 checkbox，不用自己再做比對，
+    也不會出現跟此服務類型無關的標籤選項。
     """
+    service_resp = await db_api.get(f"/services/{service_id}")
+    service_type = service_resp.json()["type"]
+
     labels_resp = await db_api.get("/labels", params={"limit": 200})
     all_labels = labels_resp.json()["items"]
+    applicable_labels = [
+        label for label in all_labels
+        if label["service_type"] == service_type or label["service_type"] is None
+    ]
 
     service_labels_resp = await db_api.get(
         f"/services/{service_id}/labels", params={"limit": 200}
@@ -207,7 +295,7 @@ async def get_service_labels(
 
     return [
         {"id": label["id"], "name": label["name"], "checked": label["id"] in checked_label_ids}
-        for label in all_labels
+        for label in applicable_labels
     ]
 
 
@@ -359,16 +447,17 @@ async def update_form(
     payload: dict,
     db_api: DbApiClient = Depends(get_db_api_client),
 ):
-    """更新表單完整內容（表單主檔 + 題組 + 題目 + 選項，差異比對式）
+    """建立新版本表單取代舊表單（舊表單保留供歷史記錄使用）
 
     **輸入**
-    - `form_id` (path, int): 表單 ID
-    - body：與 `GET /forms/{form_id}/full` 相同的巢狀結構，前端載入後
-      直接在畫面上編輯、改完整包送回即可
+    - `form_id` (path, int): 目前綁定在該服務上的表單 ID。僅用於驗證
+      「使用者正在編輯的是目前生效的版本」，此表單本身**不會被異動**。
+    - body：跟 `POST /forms` 相同的巢狀結構，外加必填的 `service_id`
     ```json
     {
+      "service_id": 17,
       "form": {
-        "name": "表單名稱",
+        "name": "表單名稱(可依需要修改)",
         "intro_content": "服務介紹(html)",
         "notice_content": "注意事項(html)",
         "terms_content": "服務條款(html)",
@@ -376,134 +465,105 @@ async def update_form(
       },
       "groups": [
         {
-          "id": 20,
-          "name": "基本資料(既有題組,帶id=更新)",
+          "name": "基本資料",
           "sort": 0,
           "topics": [
             {
-              "id": 30,
-              "title": "既有題目,帶id=更新",
-              "is_required": "1",
-              "sort": 0,
-              "options": [
-                { "id": 40, "option_name": "既有選項,帶id=更新", "unit_price": 1200 },
-                { "option_name": "新選項,不帶id=新增", "unit_price": 800 }
-              ]
-            },
-            { "title": "新題目,不帶id=新增", "type": "1", "is_required": "0", "sort": 1 }
+              "type": "3", "title": "您需要哪種清潔服務？",
+              "is_required": "1", "sort": 0,
+              "options": [ { "option_name": "居家清潔", "unit_price": 1000, "sort": 0 } ]
+            }
           ]
-        },
-        { "name": "新題組,不帶id=新增", "sort": 1, "topics": [] }
+        }
       ]
     }
     ```
-    - `form` 可省略（不需要改表單主檔欄位時）
-    - 每個 group/topic/option **有 `id`** = 更新既有項目；**沒有 `id`** = 新增
-    - 目前資料庫中存在、但這次 payload 沒帶到的 group/topic/option 會被
-      **刪除**（差異比對，比照 `PUT /services/{id}/labels` 的覆蓋式邏輯）
-    - 題目可透過放到不同的 `groups[].topics[]` 底下搬到別的題組（後端會
-      更新該題目的 `form_group_id`）；選項目前**不支援**搬到別的題目
-      （若要搬，等同刪除原選項 + 在新題目下新增一筆）
-    - 本端點不處理題目輔助圖片（`pms_topic_media`），既有圖片不會被異動
-    - `service_id`（必填）：此表單綁定的服務項目 ID，更新成功後會自動把該
-      service 的 `form_id` 欄位更新為此表單的 id
+    前端通常先呼叫 `GET /forms/{form_id}/full` 載入舊表單內容（含各層
+    `id`）供使用者編輯，改完後把整包（結構跟畫面上一致，格式跟表單一樣，
+    內容可能已修改）送回這支 API 即可——**不需要移除舊的 `id` 欄位**，
+    這裡會忽略 payload 中任何層級的 `id`（一律視為新增到新表單）。
 
-    **輸出**：更新後的完整巢狀表單結構，格式同 `GET /forms/{form_id}/full`
+    **輸出**：新建立的完整巢狀表單物件（**新的 `form_id`**），格式同 `POST /forms`
 
     **說明**
 
-    給商家後台「編輯表單」頁面用：頁面用 `GET /forms/{form_id}/full`
-    載入表單後，商家編輯表單名稱/題組/題目/選項，改完整包送回這支 API，
-    不需要前端自己算差異、分別呼叫多支底層端點。
+    ⚠️ 重要行為：此端點**不是**就地修改 `form_id` 對應的表單，而是用
+    payload 內容**建立一張全新的表單**（產生新的 `form_id`），並把
+    `service.form_id` 改指向這張新表單。路徑上的 `form_id`（舊表單）
+    **不會被刪除、也不會被修改**，繼續完整保留在資料庫中。
 
-    實作流程：
-    1. 先呼叫 `GET /forms/{form_id}/full` 取得資料庫目前的實際狀態
-    2. 比對 payload 與現況，算出現況存在但 payload 沒帶到的
-       group/topic/option（代表要刪除）
-    3. 依 選項 → 題目 → 題組 的順序刪除（避免刪除題組後題目變成孤兒資料，
-       雖然本專案資料表無實體 FK，僅為邏輯一致性考量）
-    4. 依 表單 → 題組 → 題目 → 選項 的順序，對有 `id` 的項目呼叫
-       PATCH 更新，對沒有 `id` 的項目呼叫 POST 新增
-    5. 重新呼叫 `GET /forms/{form_id}/full` 回傳最新完整結構
+    這是刻意的設計：已完成的訂單（`mms_order_record`）與回饋單
+    （`pms_form_feedback`）是透過填寫當下的 `form_id` 對應到當時的表單
+    結構，若舊表單被覆蓋或刪除，使用者事後查看歷史訂單/回饋單時看到的
+    表單內容會失真、對不上原本填的東西。改為「每次編輯都產生新版本」，
+    歷史記錄永遠對應到當時填寫的那個版本；新訂單/新填單則透過
+    `service.form_id` 使用最新版本。
 
-    ⚠️ api_server 沒有跨資源的交易機制，若中途某一步失敗，前面已完成的
-    刪除/新增/更新不會自動回滾，可能造成部分內容不一致，需要另外檢查修正。
+    驗證規則：路徑上的 `form_id` 必須是該 `service_id` **目前生效**的
+    `form_id`，否則回 409（避免編輯到已經被別的請求取代掉的過期版本）。
+
+    ⚠️ api_server 沒有跨資源的交易機制，若中途某一層建立失敗，前面已成功
+    建立的表單/題組不會自動回滾，需要另外刪除清理（與 `POST /forms` 相同限制）。
     """
-    current = (await db_api.get(f"/forms/{form_id}/full")).json()
+    service_id = payload["service_id"]
 
-    current_group_ids = {g["id"] for g in current["groups"]}
-    current_topic_ids = {t["id"] for t in current["topics"]}
-    current_option_ids = {o["id"] for t in current["topics"] for o in t.get("options", [])}
+    # 確認路徑上的 form_id 是此 service 目前生效的版本，避免編輯到過期版本
+    service_resp = await db_api.get(f"/services/{service_id}")
+    current_form_id = service_resp.json().get("form_id")
+    if current_form_id != form_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"form_id={form_id} 已不是 service_id={service_id} 目前生效的表單"
+                f"（目前為 form_id={current_form_id}），請重新載入最新表單內容"
+            ),
+        )
 
-    groups_payload = payload.get("groups", [])
+    def _strip_id(d: dict) -> dict:
+        return {k: v for k, v in d.items() if k != "id"}
 
-    # payload 中帶 id 的 group/topic/option = 要保留（更新）的既有項目
-    payload_group_ids = {g["id"] for g in groups_payload if "id" in g}
-    payload_topic_ids = {
-        t["id"] for g in groups_payload for t in g.get("topics", []) if "id" in t
-    }
-    payload_option_ids = {
-        o["id"]
-        for g in groups_payload
-        for t in g.get("topics", [])
-        for o in t.get("options", [])
-        if "id" in o
-    }
+    # 建立新版本表單（流程同 create_form_with_content，payload 中任何 id 皆忽略）
+    form_resp = await db_api.post("/forms", json=_strip_id(payload.get("form", {})))
+    new_form = form_resp.json()
+    new_form_id = new_form["id"]
 
-    # 現況有、payload 沒帶到的項目 = 要刪除。依 選項→題目→題組 順序刪除。
-    for option_id in current_option_ids - payload_option_ids:
-        await db_api.delete(f"/topic-options/{option_id}")
-    for topic_id in current_topic_ids - payload_topic_ids:
-        await db_api.delete(f"/form-topics/{topic_id}")
-    for group_id in current_group_ids - payload_group_ids:
-        await db_api.delete(f"/form-groups/{group_id}")
-
-    # 更新表單主檔欄位（可選）
-    form_payload = payload.get("form")
-    if form_payload:
-        await db_api.patch(f"/forms/{form_id}", json=form_payload)
-
-    # 依 表單→題組→題目→選項 順序新增/更新
-    for group_payload in groups_payload:
+    groups_out = []
+    for group_payload in payload.get("groups", []):
         topics_payload = group_payload.get("topics", [])
-        group_body = {k: v for k, v in group_payload.items() if k not in ("id", "topics")}
+        group_body = _strip_id({k: v for k, v in group_payload.items() if k != "topics"})
 
-        if "id" in group_payload:
-            group_id = group_payload["id"]
-            await db_api.patch(f"/form-groups/{group_id}", json=group_body)
-        else:
-            group_resp = await db_api.post(f"/forms/{form_id}/groups", json=group_body)
-            group_id = group_resp.json()["id"]
+        group_resp = await db_api.post(f"/forms/{new_form_id}/groups", json=group_body)
+        group = group_resp.json()
+        group_id = group["id"]
 
+        topics_out = []
         for topic_payload in topics_payload:
             options_payload = topic_payload.get("options", [])
-            topic_body = {k: v for k, v in topic_payload.items() if k not in ("id", "options")}
-            # 帶入所屬題組 id，題目搬到別的題組時靠這裡更新 form_group_id
+            topic_body = _strip_id({k: v for k, v in topic_payload.items() if k != "options"})
             topic_body["form_group_id"] = group_id
 
-            if "id" in topic_payload:
-                topic_id = topic_payload["id"]
-                await db_api.patch(f"/form-topics/{topic_id}", json=topic_body)
-            else:
-                topic_resp = await db_api.post(f"/forms/{form_id}/topics", json=topic_body)
-                topic_id = topic_resp.json()["id"]
+            topic_resp = await db_api.post(f"/forms/{new_form_id}/topics", json=topic_body)
+            topic = topic_resp.json()
+            topic_id = topic["id"]
 
+            options_out = []
             for option_payload in options_payload:
-                option_body = {k: v for k, v in option_payload.items() if k != "id"}
-                if "id" in option_payload:
-                    option_id = option_payload["id"]
-                    await db_api.patch(f"/topic-options/{option_id}", json=option_body)
-                else:
-                    await db_api.post(f"/form-topics/{topic_id}/options", json=option_body)
+                option_body = _strip_id(option_payload)
+                option_resp = await db_api.post(f"/form-topics/{topic_id}/options", json=option_body)
+                options_out.append(option_resp.json())
 
-    resp = await db_api.get(f"/forms/{form_id}/full")
-    result = resp.json()
+            topic["options"] = options_out
+            topics_out.append(topic)
 
-    # 把此表單的 form_id 寫回對應的 service（必填）
-    service_id = payload["service_id"]
-    await db_api.patch(f"/services/{service_id}", json={"form_id": form_id})
+        group["topics"] = topics_out
+        groups_out.append(group)
 
-    return result
+    new_form["groups"] = groups_out
+
+    # 把 service 的 form_id 改指向新表單；舊表單（路徑上的 form_id）保留不動
+    await db_api.patch(f"/services/{service_id}", json={"form_id": new_form_id})
+
+    return new_form
 
 
 @router.post("/forms", status_code=201)
@@ -553,6 +613,11 @@ async def create_form_with_content(
     `service_id`（必填）：此表單要綁定到哪個服務項目，建立成功後會自動
     把該 service 的 `form_id` 欄位更新為此表單的 id。
 
+    ⚠️ 一個 service 只能對應一張表單：若該 `service_id` 現有的
+    `form_id` 已不是 `null`（代表已經有表單），會直接回 409，
+    不會建立新表單。若要換表單，請先用 `PATCH /forms/{form_id}`
+    更新既有表單內容，而不是呼叫這支重新建立。
+
     **輸出**：建立後的完整巢狀表單物件
     ```json
     {
@@ -584,6 +649,16 @@ async def create_form_with_content(
     題目建立失敗），前面已成功建立的表單/題組不會自動回滾，需要另外
     刪除清理。這是巢狀組裝 API 目前的已知限制。
     """
+    service_id = payload["service_id"]
+
+    # 檢查此 service 是否已經有表單，不允許一個 service 對應多張表單
+    service_resp = await db_api.get(f"/services/{service_id}")
+    if service_resp.json().get("form_id") is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"service_id={service_id} 已經有對應的表單，一個服務項目不能建立多張表單",
+        )
+
     form_resp = await db_api.post("/forms", json=payload.get("form", {}))
     form = form_resp.json()
     form_id = form["id"]
@@ -620,9 +695,8 @@ async def create_form_with_content(
 
     form["groups"] = groups_out
 
-    # 把此表單的 form_id 寫回對應的 service（必填）
-    service_id = payload["service_id"]
-    await db_api.patch(f"/services/{service_id}", json={"form_id": form["id"]})
+    # 把此表單的 form_id 寫回對應的 service
+    await db_api.patch(f"/services/{service_id}", json={"form_id": form_id})
 
     return form
 
@@ -785,6 +859,62 @@ async def update_order(
     resp = await db_api.patch(f"/vendors/{service_vendor_id}/orders/{record_id}", json=payload)
     order = resp.json()
     return await attach_review_to_order(order, db_api)
+
+
+@router.get("/vendors/{service_vendor_id}")
+async def get_merchant_profile(
+    service_vendor_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得商家資訊（商家屬性 + 管理帳號清單）
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID，登入時取得
+
+    **輸出**
+    ```json
+    {
+      "vendor_profile": {
+        "id": 1,
+        "name": "服務商名稱",
+        "description": "服務商描述"
+      },
+      "accounts": [
+        {
+          "id": "019fb652-df72-7992-989e-f456194edf8c",
+          "service_vendor_id": 1,
+          "account": "vendor01@example.com",
+          "contact_name": "王小明",
+          "contact_mobile": "0912345678",
+          "contact_email": "vendor01@example.com",
+          "is_2fa_enabled": "0",
+          "last_login_time": "...",
+          "is_enable": "1",
+          "cre_time": "...", "upd_time": "..."
+        }
+      ]
+    }
+    ```
+    - `vendor_profile`：商家基本屬性
+    - `accounts`：該商家底下的管理帳號清單（不含密碼）。帳號的 `id` 即為
+      呼叫 `PATCH /vendors/{id}` 更新聯絡方式時要帶的 `account_id`
+
+    **說明**
+
+    商家後台「設定」頁面載入時呼叫，取得目前的商家屬性與管理帳號資訊
+    供畫面顯示，使用者修改後再呼叫 `PATCH /vendors/{service_vendor_id}` 儲存。
+
+    對應 `update_merchant_profile` 的讀取版本，組合兩支 api_server 端點：
+    `GET /service-vendors/{id}`（商家屬性）+ `GET /vendors/{id}/accounts`（管理帳號）。
+    個資欄位（聯絡人姓名/手機/Email）已由 api_server 解密後回傳明文。
+
+    ⚠️ 安全提醒：回傳內容包含管理帳號的個資明文，目前平台無身分驗證機制，
+    任何知道 `service_vendor_id` 的人都能呼叫並取得這些資訊。
+    """
+    vendor_resp = await db_api.get(f"/service-vendors/{service_vendor_id}")
+    accounts = await db_api.get_all_items(f"/vendors/{service_vendor_id}/accounts")
+
+    return {"vendor_profile": vendor_resp.json(), "accounts": accounts}
 
 
 @router.patch("/vendors/{service_vendor_id}")
