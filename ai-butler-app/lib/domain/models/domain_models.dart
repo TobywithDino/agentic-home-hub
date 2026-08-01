@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
 
+import 'package:ai_butler_app/core/utils/api_time.dart';
+import 'package:ai_butler_app/domain/logic/order_status_mapper.dart';
+
 /// 登入成功後的身分憑證（Requirement 1.4、2.1）。
 @immutable
 class AuthSession {
@@ -324,6 +327,56 @@ class ConsultationItem {
   final String status;
 }
 
+/// 訂單品項明細，對應 `mms_order_record.order_items` JSONB 內的
+/// `orderItems[]` 元素。
+///
+/// 實際 JSON 形狀（欄位皆可能為 null）：
+/// ```json
+/// {
+///   "itemName": "現場勘驗費",
+///   "quantity": null,
+///   "unit": null,
+///   "unitPrice": 286,
+///   "itemAmount": 286,
+///   "attribute": ["師傅車資與檢驗人工費用", "場勘時間：2026/06/25 09:00"]
+/// }
+/// ```
+@immutable
+class OrderLineItem {
+  const OrderLineItem({
+    required this.itemName,
+    this.quantity,
+    this.unit = '',
+    this.unitPrice = 0,
+    this.itemAmount = 0,
+    this.attributes = const <String>[],
+  });
+
+  final String itemName;
+
+  /// 數量。null 代表後端未提供（不可分項計數的服務）。
+  final num? quantity;
+  final String unit;
+  final num unitPrice;
+  final num itemAmount;
+
+  /// 品項補充說明，逐條列出。
+  final List<String> attributes;
+
+  /// 「NT$286 × 2 件」這類單價描述；資料不足時回傳空字串。
+  String get unitPriceLabel {
+    if (unitPrice <= 0) return '';
+    final buffer = StringBuffer('NT\$${_trimNum(unitPrice)}');
+    if (quantity != null) {
+      buffer.write(' × ${_trimNum(quantity!)}');
+      if (unit.isNotEmpty) buffer.write(' $unit');
+    } else if (unit.isNotEmpty) {
+      buffer.write(' / $unit');
+    }
+    return buffer.toString();
+  }
+}
+
 /// 我的訂單清單項目（Requirement 15.4）。
 @immutable
 class OrderItem {
@@ -333,10 +386,27 @@ class OrderItem {
     required this.orderStatus,
     required this.finalAmount,
     required this.orderTime,
+    this.recordId = 0,
+    this.serviceId = 0,
+    this.serviceVendorId = 0,
     this.serviceName = '',
     this.contactMobile = '',
+    this.commentStatus = '01',
+    this.review,
+    this.lineItems = const <OrderLineItem>[],
+    this.lineItemsTotal,
+    this.depositAmount = 0,
+    this.quoteNo = '',
+    this.remark = '',
+    this.depositTime,
+    this.serviceTime,
+    this.completeTime,
+    this.cancelTime,
   });
 
+  final int recordId;
+  final int serviceId;
+  final int serviceVendorId;
   final String orderNo;
 
   /// 兩位數字代碼，見附錄 B。
@@ -346,6 +416,53 @@ class OrderItem {
   final DateTime orderTime;
   final String serviceName;
   final String contactMobile;
+
+  /// 00=無須評價 01=未評價 02=已評價
+  final String commentStatus;
+
+  /// 附帶的評價物件（null = 尚未評價）
+  final OrderReview? review;
+
+  /// `order_items.orderItems[]` 解析結果，供詳情頁逐項呈現。
+  final List<OrderLineItem> lineItems;
+
+  /// `order_items.totalAmount`。null 代表後端未提供。
+  final num? lineItemsTotal;
+
+  final num depositAmount;
+  final String quoteNo;
+  final String remark;
+
+  final DateTime? depositTime;
+  final DateTime? serviceTime;
+  final DateTime? completeTime;
+  final DateTime? cancelTime;
+
+  /// 訂單是否已完成。
+  ///
+  /// 不同 `order_type` 的完成狀態碼不同（例如訂位是 70 或 80、服務訂單是 80，
+  /// 部分退款 98 也算結案），所以交給 [OrderStatusMapper] 判斷分組，
+  /// 不寫死成 `orderStatus == '80'`。
+  bool get isCompleted =>
+      OrderStatusMapper.map(orderType, orderStatus).group ==
+      OrderStatusGroup.completed;
+
+  /// 訂單已完成且尚未評價 → 可提交評價。
+  ///
+  /// 刻意不檢查 `comment_status == '01'`：demo 資料裡有不少已完成訂單的
+  /// `comment_status` 是 `00`（無須評價），若照著擋會完全沒有訂單可評價。
+  /// 後端仍會做最終驗證，被拒絕時錯誤訊息會直接顯示給使用者。
+  bool get canReview => isCompleted && !isReviewed;
+
+  /// 已評價。
+  bool get isReviewed => commentStatus == '02' || review != null;
+}
+
+/// 去掉沒必要的小數點：286.0 → '286'，286.5 → '286.5'。
+String _trimNum(num value) {
+  if (value is int) return value.toString();
+  if (value == value.roundToDouble()) return value.toInt().toString();
+  return value.toString();
 }
 
 @immutable
@@ -456,8 +573,5 @@ class OrderReview {
     return const <String>[];
   }
 
-  static DateTime? _parseDateTime(dynamic raw) {
-    if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
-    return null;
-  }
+  static DateTime? _parseDateTime(dynamic raw) => ApiTime.tryParse(raw);
 }
