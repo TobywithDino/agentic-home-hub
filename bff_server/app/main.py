@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.client import DbApiClient
 from app.config import get_settings
-from app.routers import app_api, merchant_api
+from app.routers import ai_api, app_api, merchant_api
 
 settings = get_settings()
 
@@ -42,6 +42,7 @@ app.add_middleware(
 
 app.include_router(app_api.router)
 app.include_router(merchant_api.router)
+app.include_router(ai_api.router)
 
 
 @app.get("/health", tags=["system"])

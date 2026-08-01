@@ -36,6 +36,33 @@ class DbApiClient:
     async def get(self, path: str, **kwargs) -> httpx.Response:
         return await self.request("GET", path, **kwargs)
 
+    async def get_all_items(
+        self, path: str, params: dict | None = None, page_size: int = 200
+    ) -> list:
+        """依 api_server 的 PagedResponse 格式（total/limit/offset/items）
+        自動迴圈抓取全部分頁，回傳合併後的完整清單。
+
+        給需要「一次拿到全部資料」的場景用（例如提供給 AI/Lambda 做整批
+        分析），避免呼叫端還要自己處理 limit/offset 分頁迴圈。
+        """
+        items: list = []
+        offset = 0
+        query = dict(params or {})
+        query["limit"] = page_size
+
+        while True:
+            query["offset"] = offset
+            resp = await self.get(path, params=query)
+            data = resp.json()
+            page_items = data["items"]
+            items.extend(page_items)
+
+            offset += page_size
+            if not page_items or offset >= data["total"]:
+                break
+
+        return items
+
     async def get_optional(self, path: str, **kwargs) -> httpx.Response | None:
         """GET 但把 404 當作「此資源不存在」而非錯誤，回傳 None。
 

@@ -21,12 +21,13 @@ agentic-home-hub/
     ├── README.md             架構說明 + 端點對應表
     ├── deploy.sh             一鍵部署到 EC2 的腳本
     └── app/
-        ├── client.py         封裝呼叫 Database/api_server 的 httpx client（含 get_optional，把 404 當正常空值）
+        ├── client.py         封裝呼叫 Database/api_server 的 httpx client（含 get_optional 把404當空值、get_all_items 自動分頁抓全部）
         ├── config.py         環境變數設定
         ├── review_utils.py   共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
         └── routers/
             ├── app_api.py       APP 前端呼叫的 7 支 API
-            └── merchant_api.py  商家後台呼叫的 11 支 API
+            ├── merchant_api.py  商家後台呼叫的 11 支 API
+            └── ai_api.py        給部署在 Lambda 上的 AI 服務呼叫的 2 支 API（取商家/服務項目的完整評價清單）
 ```
 
 ## 架構
@@ -84,7 +85,7 @@ bash deploy.sh
 - **label / service_label**：標籤主檔 + 服務項目與標籤的多對多關聯表
 - **user_accounts / vendor_accounts**：會員 / 商家後台登入帳號（密碼 bcrypt 雜湊，個資 AES-256-GCM 加密存 `bytea`，同時有明文欄位對應的 `_hash` 欄位可查詢比對）
 - **mms_order_record**：訂單/訂位統一紀錄表
-- **mms_order_review**：訂單評價，`record_id` 直接沿用對應 `mms_order_record.record_id`（1:0..1，無獨立序列），一筆訂單至多一筆評價由 PK 天然保證。新增評價會同步把訂單的 `comment_status` 改成 `02`。`GET /services/{service_id}/reviews` 是全平台唯一不需身分驗證即可呼叫的公開端點（評價牆）。bff_server 所有回傳訂單的端點（`view_orders`、`list_orders`、`create_order`、`update_order`）都會用 `review_utils.py` 把對應評價併入訂單物件的 `review` 欄位（沒評價過則為 `null`），前端不需要另外呼叫評價 API。使用者提交評價走 `app_api.py` 的 `POST /orders/{record_id}/review`，修改評價走 `PATCH /users/{inbr_account_id}/orders/{record_id}/review`（皆為轉發 api_server，業務規則如訂單須完成、身分比對、防重複皆由 api_server 驗證）。
+- **mms_order_review**：訂單評價，`record_id` 直接沿用對應 `mms_order_record.record_id`（1:0..1，無獨立序列），一筆訂單至多一筆評價由 PK 天然保證。新增評價會同步把訂單的 `comment_status` 改成 `02`。`GET /services/{service_id}/reviews` 是全平台唯一不需身分驗證即可呼叫的公開端點（評價牆，回傳精簡過的 `PublicReviewOut`）。bff_server 所有回傳訂單的端點（`view_orders`、`list_orders`、`create_order`、`update_order`）都會用 `review_utils.py` 把對應評價併入訂單物件的 `review` 欄位（沒評價過則為 `null`），前端不需要另外呼叫評價 API。使用者提交評價走 `app_api.py` 的 `POST /orders/{record_id}/review`，修改評價走 `PATCH /users/{inbr_account_id}/orders/{record_id}/review`（皆為轉發 api_server，業務規則如訂單須完成、身分比對、防重複皆由 api_server 驗證）。`ai_api.py` 提供給 Lambda AI 服務用的完整評價批次查詢（依商家或依服務項目），回傳未經裁切的 `ReviewOut` 完整欄位，並用 `client.py` 的 `get_all_items` 自動處理分頁抓取全部資料
 - **pms_form 系列**：諮詢表單結構（form → group → topic → option/media）。merchant_api.py 的 `POST /forms` 提供一次性建立表單+巢狀題組/題目/選項的組裝端點；`PATCH /forms/{id}` 提供差異比對式的完整表單更新（前端傳整包巢狀結構，帶 `id` 的項目視為更新、不帶 `id` 視為新增、現況有但 payload 沒帶到的視為刪除，依 選項→題目→題組 順序刪除、表單→題組→題目→選項 順序新增/更新）；兩者皆因 api_server 只有單筆 CRUD 端點、無跨資源交易機制，BFF 依序呼叫多支端點組裝，中途失敗不會自動回滾。`GET /vendors/{id}/forms`（清單，僅主檔）、`GET /forms/{id}/full`（單張表單完整巢狀內容，直接轉發 api_server 現成端點）
 - **pms_form_feedback**：使用者填寫表單後的回饋記錄
 - **mms_review_summary_service / mms_review_summary_vendor**：評價AI摘要表（`Database/database/mms_review_summary.sql`，新增功能，目前無種子資料）。皆為「覆寫式快取」設計，同一個key只保留最新1筆，重新生成時直接覆蓋，不留歷史版本：
