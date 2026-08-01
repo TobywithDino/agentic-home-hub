@@ -2,4 +2,7 @@ __pycache__/
 *.pyc
 .venv/
 .env
-deploy.sh
+
+# 部署設定含 AWS account id / EC2 IP / instance id，不進版控。
+# deploy.sh 本身已無機密（全部讀這個檔），所以恢復追蹤。
+.deploy.env
