@@ -27,6 +27,7 @@ agentic-home-hub/
 │   ├── API.md                端點規格
 │   └── app/
 │       ├── client.py         封裝呼叫 Database/api_server 的 httpx client
+│       │                     （會自動濾掉 params 裡值為 None 的 key，見下方「開發慣例」）
 │       │                     （含 get_optional 把 404 當空值、get_all_items 自動分頁抓全部）
 │       ├── config.py         環境變數設定
 │       ├── review_utils.py   共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
@@ -185,7 +186,7 @@ agentcore logs               # 看 runtime 日誌
 - **user_accounts / vendor_accounts**：會員 / 商家後台登入帳號（密碼 bcrypt 雜湊，個資 AES-256-GCM 加密存 `bytea`，同時有明文欄位對應的 `_hash` 欄位可查詢比對）
 - **mms_order_record**：訂單/訂位統一紀錄表
 - **mms_order_review**：訂單評價，`record_id` 直接沿用對應 `mms_order_record.record_id`（1:0..1，無獨立序列），一筆訂單至多一筆評價由 PK 天然保證。新增評價會同步把訂單的 `comment_status` 改成 `02`。`GET /services/{service_id}/reviews` 是全平台唯一不需身分驗證即可呼叫的公開端點（評價牆，回傳精簡過的 `PublicReviewOut`）。bff_server 所有回傳訂單的端點（`view_orders`、`list_orders`、`create_order`、`update_order`）都會用 `review_utils.py` 把對應評價併入訂單物件的 `review` 欄位（沒評價過則為 `null`），前端不需要另外呼叫評價 API。使用者提交評價走 `app_api.py` 的 `POST /orders/{record_id}/review`，修改評價走 `PATCH /users/{inbr_account_id}/orders/{record_id}/review`（皆為轉發 api_server，業務規則如訂單須完成、身分比對、防重複皆由 api_server 驗證）。批次查詢完整評價（回傳未經裁切的 `ReviewOut` 完整欄位，用 `client.py` 的 `get_all_items` 自動處理分頁抓取全部資料）：商家視角在 `merchant_api.py` 的 `GET /vendors/{id}/reviews`，APP 端依服務項目查詢在 `app_api.py` 的 `GET /services/{id}/reviews`（注意跟 api_server 同名的公開評價牆端點不同，這支回傳含身分關聯的完整內容，不適合當公開頁面用）
-- **pms_form 系列**：諮詢表單結構（form → group → topic → option/media）。merchant_api.py 的 `POST /forms` 提供一次性建立表單+巢狀題組/題目/選項的組裝端點；`PATCH /forms/{id}` 提供差異比對式的完整表單更新（前端傳整包巢狀結構，帶 `id` 的項目視為更新、不帶 `id` 視為新增、現況有但 payload 沒帶到的視為刪除，依 選項→題目→題組 順序刪除、表單→題組→題目→選項 順序新增/更新）；兩者皆因 api_server 只有單筆 CRUD 端點、無跨資源交易機制，BFF 依序呼叫多支端點組裝，中途失敗不會自動回滾。`GET /vendors/{id}/forms`（清單，僅主檔）、`GET /forms/{id}/full`（單張表單完整巢狀內容，直接轉發 api_server 現成端點）
+- **pms_form 系列**：諮詢表單結構（form → group → topic → option/media）。merchant_api.py 的 `POST /forms` 提供一次性建立表單+巢狀題組/題目/選項的組裝端點；`PATCH /forms/{id}` 提供差異比對式的完整表單更新（前端傳整包巢狀結構，帶 `id` 的項目視為更新、不帶 `id` 視為新增、現況有但 payload 沒帶到的視為刪除，依 選項→題目→題組 順序刪除、表單→題組→題目→選項 順序新增/更新）；兩者皆因 api_server 只有單筆 CRUD 端點、無跨資源交易機制，BFF 依序呼叫多支端點組裝，中途失敗不會自動回滾。`GET /vendors/{id}/forms`（清單，僅主檔）、`GET /forms/{id}/full`（單張表單完整巢狀內容，直接轉發 api_server 現成端點）。`app_api.py` 的 `GET /services/{service_id}/form/full` 給 AI 管家用：走 `cms_homepage_service.form_id` 取該服務項目對應表單的完整內容（組合 `GET /services/{id}` 取 form_id + `GET /forms/{form_id}/full`），`form_id` 為 NULL 時回 404 並在 detail 說明「尚未設定對應表單」。**不要改用 `pms_form.service_vendor_id` 反查商家表單**：實際資料裡單一商家名下有十幾張表單（含測試用、給別的服務用的），沒有可靠依據挑出正確那張，`form_id` 就是為補這個查詢缺口而加的。
 - **pms_form_feedback**：使用者填寫表單後的回饋記錄
 - **mms_review_summary_service / mms_review_summary_vendor**：評價AI摘要表（`Database/database/mms_review_summary.sql`，新增功能，目前無種子資料）。皆為「覆寫式快取」設計，同一個key只保留最新1筆，重新生成時直接覆蓋，不留歷史版本：
   - `mms_review_summary_service`：PK為`service_id`（與`cms_homepage_service.id`共用值），彙整單一服務項目底下所有`mms_order_review`的AI摘要，面向使用者與供應商共用同一份內容。
@@ -201,6 +202,7 @@ agentcore logs               # 看 runtime 日誌
 - 型別標註走簡短風格（`(path, int)`、`(query, string, 可選)`），避免寫完整 Python union type，文件會太長難讀。
 - payload 目前先用 `dict` 接收（快速開發），還沒上 Pydantic model 做驗證，之後有空可以補上。
 - `TODO` 註解標記之後要補的排序/篩選邏輯，目前多數端點是「轉發 api_server + 少量組裝」的最小可行版本。
+- **可選 query 參數不用怕傳 None**：`client.py` 的 `request` / `get_optional` 會統一把 `params` 裡值為 None 的 key 濾掉。這不是潔癖 —— httpx 會把 `{"type": None}` 序列化成 `type=`（空字串），api_server 收到空字串會當成「篩選 type 等於空字串」而回 0 筆。實際踩過：`GET /forms?service_vendor_id=1` 有 14 筆，多帶一個空的 `type=` 就變 0 筆，導致商家後台表單清單整頁是空的。
 
 ## agent_service 開發慣例
 
@@ -217,7 +219,8 @@ agentcore logs               # 看 runtime 日誌
 - **前端切 SSE 不能靠 chunk 邊界**。TCP 會任意切割位元組，`http_butler_ai_service.dart` 的 `_sseLines` 用緩衝區累積到換行才算一行；把每個 chunk 當一筆事件會隨機解析失敗。
 - AI 管家的 `receiveTimeout` 要放寬到分鐘級（目前 3 分鐘）。`ApiClient` 預設 20 秒，但模型思考加多次 tool 往返很容易超過，所以那支 service 用自己的 Dio 實例。
 - `app/AiButler/` 內部是**平坦 import**（`from config import ...`），因為 codeLocation 目錄本身就是 package 根。不要寫成 `from app.config import ...`。
-- 本機開發時 `BFF_BASE_URL` 留空就走 `backend.py` 的內建假資料，不需要等後端就緒。
+- 本機開發時 `BFF_BASE_URL` 留空就走 `backend.py` 的內建假資料，不需要等後端就緒。**部署時務必確認 `agentcore.json` 的 `BFF_BASE_URL` 有值** —— 留空的話 agent 會安靜地回假資料（`鳥花枝居酒屋`／`初魚鐵板燒`／vendor id 101/102），看起來一切正常但完全沒碰 DB。假資料的 topic_id 是 1~5 與 11~14，真實資料是三位數，用這個可以快速判斷。
+- **表單是掛在服務項目上，不是商家上**。`get_service_form` 收 `service_id` 而非 `vendor_id`，走 `cms_homepage_service.form_id`。`find_service_vendors` 回傳的每個服務項目帶 `has_form`，讓模型先知道哪些能線上填單，不會挑了之後才撞牆。
 
 ## 已知限制（上線前必須處理，demo 階段暫緩）
 

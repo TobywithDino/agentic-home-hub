@@ -26,6 +26,7 @@ from typing import Any
 class SessionState:
     vendors: list[dict[str, Any]] = field(default_factory=list)
     selected_vendor_id: int | None = None
+    selected_service_id: int | None = None
     form: dict[str, Any] | None = None
     touched_at: float = field(default_factory=time.time)
 
@@ -42,11 +43,21 @@ class SessionState:
         self.touched_at = time.time()
 
     def remember_form(
-        self, vendor_id: int, form_id: int, topics: list[dict[str, Any]]
+        self, service_id: int, form_id: int, topics: list[dict[str, Any]]
     ) -> None:
-        self.selected_vendor_id = vendor_id
+        # 表單是掛在服務項目上的（cms_homepage_service.form_id），
+        # 所以工作集記的是 service_id。順手回推 vendor_id 供提示顯示用。
+        self.selected_service_id = service_id
+        self.selected_vendor_id = next(
+            (
+                v["vendor_id"]
+                for v in self.vendors
+                if service_id in v.get("service_ids", [])
+            ),
+            self.selected_vendor_id,
+        )
         self.form = {
-            "vendor_id": vendor_id,
+            "service_id": service_id,
             "form_id": form_id,
             "topics": [
                 {
@@ -76,8 +87,14 @@ class SessionState:
 
         if self.form:
             f = self.form
+            vendor_hint = (
+                f"，vendor_id={self.selected_vendor_id}"
+                if self.selected_vendor_id is not None
+                else ""
+            )
             lines.append(
-                f"\n已取得的表單：vendor_id={f['vendor_id']}，form_id={f['form_id']}"
+                f"\n已取得的表單：service_id={f['service_id']}，"
+                f"form_id={f['form_id']}{vendor_hint}"
             )
             lines.append("題目（topic_id 照抄，不要用題號）：")
             for t in f["topics"]:

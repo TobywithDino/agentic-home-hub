@@ -38,6 +38,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # 瀏覽器預設只讓 JS 讀取少數安全標頭，自訂標頭一律隱藏。
+    # 不開放這個，Flutter Web 讀 X-Session-Id 會拿到 null，
+    # 每輪都變成新 session，AI 管家就完全沒有前文記憶。
+    # （用 curl 測不會發現，因為 curl 不受 CORS 限制。）
+    expose_headers=["X-Session-Id"],
 )
 
 app.include_router(app_api.router)

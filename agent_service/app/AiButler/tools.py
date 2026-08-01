@@ -161,7 +161,13 @@ async def find_service_vendors(
             "name": v["name"],
             "description": v.get("description") or "",
             "services": [
-                {"service_id": s["id"], "name": s["name"]}
+                {
+                    "service_id": s["id"],
+                    "name": s["name"],
+                    # form_id 為 null 表示這個服務項目還沒設定表單，無法線上填單。
+                    # 先讓模型看到，它才不會挑了之後才在 get_service_form 撞牆。
+                    "has_form": s.get("form_id") is not None,
+                }
                 for s in v.get("matched_services", [])
             ],
         }
@@ -175,6 +181,11 @@ async def find_service_vendors(
         "service_type_label": SERVICE_TYPE_LABELS.get(service_type, ""),
         "count": len(slim),
         "vendors": slim,
+        "note": (
+            "只有 has_form=true 的服務項目能線上填單。"
+            "使用者沒特別指定時優先推薦這些；若他選的服務 has_form=false，"
+            "要老實說那個服務目前無法透過對話填單。"
+        ),
     }
 
 
@@ -238,46 +249,47 @@ async def show_vendor_list(ctx: ToolContext, args: dict[str, Any]) -> dict[str, 
 @tool(
     name="get_service_form",
     description=(
-        "取得某服務商的表單題目結構。選定服務商後、開始問細節前必須呼叫。"
+        "取得某個服務項目的表單題目結構。選定服務項目後、開始問細節前必須呼叫。"
         "回傳的 topics 就是要問使用者的題目，依 sort 順序問，"
         "is_required=1 的一定要問到答案。單選/複選題只能用 options 裡的 option_name。"
     ),
     schema={
         "type": "object",
         "properties": {
-            "vendor_id": {
+            "service_id": {
                 "type": "integer",
                 "description": (
-                    "服務商 id，必須是 find_service_vendors 回傳的 vendor_id 值。"
-                    "不是「第幾家」的序號 —— 使用者說「第二家」時要換算成該家的 vendor_id。"
+                    "服務項目 id，必須是 find_service_vendors 回傳的 services[].service_id 值。"
+                    "注意是「服務項目」不是「服務商」—— 一個服務商可能有多個服務項目，"
+                    "表單是掛在服務項目上的。也不是「第幾家」的序號。"
                 ),
             },
         },
-        "required": ["vendor_id"],
+        "required": ["service_id"],
     },
 )
 async def get_service_form(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    vendor_id = int(args["vendor_id"])
-    forms = await ctx.backend.get_vendor_forms(vendor_id)
-    if not forms:
-        # 這個錯誤要能讓模型自己修好。實測最常見的原因是把「第N家」的
-        # 序號當成 vendor_id 傳進來，所以直接把診斷寫在訊息裡。
+    service_id = int(args["service_id"])
+    full = await ctx.backend.get_service_form(service_id)
+    if not full:
+        # 這個錯誤要能讓模型自己修好，所以把兩種可能原因都寫清楚：
+        # 傳錯 id（實測最常見是把「第N家」的序號當 id），或這個服務真的沒表單。
         return {
-            "error": "VendorNotFound",
+            "error": "ServiceFormNotFound",
             "detail": (
-                f"找不到 vendor_id={vendor_id} 的表單。"
-                "確認你傳的是 find_service_vendors 回傳的 vendor_id，"
-                "而不是「第幾家」的序號。不確定就重新呼叫 find_service_vendors 查一次。"
+                f"service_id={service_id} 找不到對應表單。可能是："
+                "(1) 你傳的不是 find_service_vendors 回傳的 services[].service_id，"
+                "請重新呼叫 find_service_vendors 查正確的值；"
+                "(2) 這個服務項目尚未設定表單，那就告訴使用者這個服務目前無法線上填單，"
+                "並建議改選同類型的其他服務項目。不要自己編一份表單題目出來。"
             ),
         }
 
-    # 只取第一張已啟用表單。多張表單的挑選邏輯等實際資料出來再處理。
-    full = forms[0]
     form = full["form"]
     topics = sorted(full.get("topics", []), key=lambda t: t.get("sort", 0))
 
     slim_topics = [_slim_topic(t) for t in topics]
-    ctx.state.remember_form(vendor_id, int(form["id"]), slim_topics)
+    ctx.state.remember_form(service_id, int(form["id"]), slim_topics)
 
     return {
         "form_id": form["id"],
@@ -489,17 +501,18 @@ async def _validate_against_form(
     訊息要寫得夠具體讓它能自己修好，不要只說「參數錯誤」。
     """
     vendor_id = int(args["vendor_id"])
-    forms = await ctx.backend.get_vendor_forms(vendor_id)
-    if not forms:
+    service_id = int(args["service_id"])
+
+    full = await ctx.backend.get_service_form(service_id)
+    if not full:
         return {
-            "error": "VendorNotFound",
+            "error": "ServiceFormNotFound",
             "detail": (
-                f"找不到 vendor_id={vendor_id} 的表單。"
-                "確認傳的是 find_service_vendors 回傳的 vendor_id，不是序號。"
+                f"service_id={service_id} 找不到對應表單。"
+                "確認傳的是 find_service_vendors 回傳的 services[].service_id，不是序號。"
             ),
         }
 
-    full = forms[0]
     form = full["form"]
     topics = {int(t["id"]): t for t in full.get("topics", [])}
 
@@ -508,8 +521,8 @@ async def _validate_against_form(
         return {
             "error": "FormIdMismatch",
             "detail": (
-                f"form_id={args['form_id']} 不對，這個服務商的 form_id 是 {form['id']}。"
-                "請用 get_service_form 回傳的 form_id。"
+                f"form_id={args['form_id']} 不對，service_id={service_id} 的 form_id "
+                f"是 {form['id']}。請用 get_service_form 回傳的 form_id。"
             ),
         }
 
