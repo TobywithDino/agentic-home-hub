@@ -29,6 +29,9 @@
   - [更新特定訂單](#patch-merchant-apivendorsservice_vendor_idordersrecord_id)
   - [設定商家資訊](#patch-merchant-apivendorsservice_vendor_id)
   - [商家後台登入](#post-merchant-apiauthlogin)
+- [AI 端（ai_api.py，prefix: `/ai-api`）](#ai-端-ai_apipy-prefix-ai-api)
+  - [取得商家所有服務的評價](#get-ai-apivendorsservice_vendor_idreviews)
+  - [取得服務項目的評價](#get-ai-apiservicesservice_idreviews)
 
 ---
 
@@ -598,6 +601,52 @@ APP 會員登入
 ```
 
 **說明**：驗證商家帳密，成功後回傳 `service_vendor_id` 和 `account_id`，前端存起來供後續 API 呼叫使用。目前無 token 機制，僅回傳識別碼。
+
+---
+
+## AI 端（ai_api.py，prefix: `/ai-api`）
+
+給部署在 AWS Lambda 上的 AI 服務呼叫，不是給前端 APP/商家後台用。
+
+### `GET /ai-api/vendors/{service_vendor_id}/reviews`
+
+取得某商家「所有服務項目」底下全部訂單的評價（完整內容）
+
+**輸入**
+- `service_vendor_id` (path, int)：服務商 ID
+
+**輸出**：評價物件陣列（不分頁，一次回傳全部）
+```json
+[
+  {
+    "record_id": 1, "order_no": "...", "service_vendor_id": 1, "service_id": 17,
+    "inbr_account_id": "...", "overall_rating": 5,
+    "rating_detail": { "service": 5, "attitude": 4 },
+    "review_content": "服務很好，準時到府", "media": ["https://.../photo1.jpg"],
+    "status": "01", "is_deleted": false, "cre_time": "...", "upd_time": "..."
+  }
+]
+```
+每筆欄位對應 `mms_order_review` 完整內容（`ReviewOut`），非公開評價牆的精簡格式，包含 `inbr_account_id`、`order_no` 等內部欄位。
+
+**說明**：給 Lambda 上的 AI 服務批次抓取某商家全部評價用（例如整理評價摘要、情緒分析、關鍵字統計）。內部呼叫 api_server 的 `GET /vendors/{service_vendor_id}/reviews`，該端點本身涵蓋此商家名下**所有服務項目**的評價，並自動處理分頁（`limit`/`offset`）迴圈抓取到底，一次回傳完整清單。
+
+---
+
+### `GET /ai-api/services/{service_id}/reviews`
+
+取得某個服務項目底下全部訂單的評價（完整內容）
+
+**輸入**
+- `service_id` (path, int)：服務項目 ID
+
+**輸出**：評價物件陣列（不分頁，一次回傳全部），格式同上
+
+**說明**：給 Lambda 上的 AI 服務批次抓取某個服務項目全部評價用，範圍比 `GET /ai-api/vendors/{service_vendor_id}/reviews` 更窄（只限定單一服務項目）。
+
+api_server 沒有「直接依 service_id 查完整評價」的端點——現成的 `GET /services/{service_id}/reviews` 是公開評價牆，回傳精簡過的 `PublicReviewOut`（刻意排除 `inbr_account_id`/`order_no`/`service_vendor_id`/`status` 等欄位）。AI 端需要完整欄位，因此改用組合查詢：
+1. `GET /services/{service_id}` 查出該服務所屬的 `service_vendor_id`
+2. `GET /vendors/{service_vendor_id}/reviews?service_id={service_id}`（帶篩選）並自動分頁抓取到底
 
 ---
 

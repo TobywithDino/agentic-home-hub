@@ -12,9 +12,9 @@
 
 ## 目前狀態
 
-裡面的 12 支 function 對應 `Database/AI指示文件/DB_API_1.jpg`（APP 端）與
-`DB_API_2.jpg`（商家後台）兩張圖的每一個框框，目前先做「轉發 api_server + TODO」的假function，
-之後再依前端實際需求逐步補上排序/篩選規則。
+`app_api.py`/`merchant_api.py` 對應 `Database/AI指示文件/DB_API_1.jpg`（APP 端）與
+`DB_API_2.jpg`（商家後台）兩張圖的每一個框框，另外 `ai_api.py` 是給部署在
+Lambda 上的 AI 服務呼叫的批次查詢 API（非前端使用）。完整端點清單與範例見 `API.md`。
 
 ## 最小啟動步驟
 
