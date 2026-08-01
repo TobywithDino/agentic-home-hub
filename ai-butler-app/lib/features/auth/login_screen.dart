@@ -42,11 +42,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
-  Future<void> _quickDemoLogin() async {
-    final ok = await ref.read(authNotifierProvider.notifier).quickDemoLogin();
-    if (ok && mounted) context.go(Routes.home);
-  }
-
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authNotifierProvider);
@@ -109,11 +104,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               strokeWidth: 2, color: Colors.white),
                         )
                       : const Text('登入'),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                OutlinedButton(
-                  onPressed: authState.isLoading ? null : _quickDemoLogin,
-                  child: const Text('demo 快速登入'),
                 ),
               ],
             ),
