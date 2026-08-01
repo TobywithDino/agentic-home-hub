@@ -669,3 +669,62 @@ class OrderSummaryOut(BaseModel):
     """會員「查看訂單」拼接回應：未處理 feedback + orders"""
     feedbacks: list[FeedbackOut]
     orders: list[OrderOut]
+
+
+# ---------------------------------------------------------------------------
+# I. 訂單評價
+# ---------------------------------------------------------------------------
+class ReviewCreate(BaseModel):
+    inbr_account_id: uuid.UUID
+    overall_rating: int = Field(ge=1, le=5)
+    rating_detail: JsonValue | None = None
+    review_content: str | None = None
+    media: JsonValue | None = None
+
+
+class ReviewUpdate(BaseModel):
+    """評價者本人修改內容用。依現有架構(無身分驗證中介層)，由呼叫端於路由層
+    自行比對 inbr_account_id 是否與該筆評價一致，本 schema 僅負責欄位驗證。"""
+    overall_rating: int | None = Field(default=None, ge=1, le=5)
+    rating_detail: JsonValue | None = None
+    review_content: str | None = None
+    media: JsonValue | None = None
+
+
+class ReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    record_id: int
+    order_no: str
+    service_vendor_id: int
+    service_id: int
+    inbr_account_id: uuid.UUID
+    overall_rating: int
+    rating_detail: JsonValue | None
+    review_content: str | None
+    media: JsonValue | None
+    status: str
+    is_deleted: bool
+    cre_id: uuid.UUID
+    cre_time: dt.datetime
+    upd_id: uuid.UUID | None
+    upd_time: dt.datetime
+
+
+class PublicReviewOut(BaseModel):
+    """公開評價牆專用（GET /services/{service_id}/reviews，無需身分驗證即可呼叫）。
+    刻意排除 inbr_account_id/order_no/service_vendor_id/status/is_deleted 等
+    身分或內部狀態欄位，避免對外洩漏評價者身分或訂單資訊。"""
+    model_config = ConfigDict(from_attributes=True)
+    record_id: int
+    overall_rating: int
+    rating_detail: JsonValue | None
+    review_content: str | None
+    media: JsonValue | None
+    cre_time: dt.datetime
+
+
+class RatingSummaryOut(BaseModel):
+    service_vendor_id: int
+    service_id: int | None = None
+    review_count: int
+    average_rating: float | None

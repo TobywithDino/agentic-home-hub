@@ -356,3 +356,25 @@ class MmsOrderRecord(Base):
     cre_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
     upd_id: Mapped[uuid_mod.UUID] = mapped_column(UUID)
     upd_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class MmsOrderReview(Base):
+    """訂單評價單。record_id 與 mms_order_record 共用主鍵值(1:0..1對應)，
+    本表無獨立序列，新增資料時 record_id 必須從對應訂單取得，不可自動產生。"""
+    __tablename__ = "mms_order_review"
+
+    record_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    order_no: Mapped[str] = mapped_column(String(50))
+    service_vendor_id: Mapped[int] = mapped_column(Integer)
+    service_id: Mapped[int] = mapped_column(Integer)
+    inbr_account_id: Mapped[uuid_mod.UUID] = mapped_column(UUID)
+    overall_rating: Mapped[int] = mapped_column(Integer)
+    rating_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    review_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(2), default="01")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    cre_id: Mapped[uuid_mod.UUID] = mapped_column(UUID)
+    cre_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
+    upd_id: Mapped[uuid_mod.UUID | None] = mapped_column(UUID, nullable=True)
+    upd_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
