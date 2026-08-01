@@ -15,6 +15,12 @@ dependencies:
 
   # Networking
   dio: ^5.7.0
+  # AI 管家的 SSE 串流用 http + fetch_client，不用 dio。
+  # 原因：dio 在 Web 上走 XMLHttpRequest，不支援漸進式讀取 byte stream，
+  # ResponseType.stream 在瀏覽器會拿不到資料並拋例外（原生平台正常，
+  # 所以「後端測得過、App 卻壞」）。fetch_client 走 Fetch API 才有真串流。
+  http: ^1.2.0
+  fetch_client: ^1.1.4
 
   # State Management
   flutter_riverpod: ^2.6.1

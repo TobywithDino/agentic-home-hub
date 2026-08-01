@@ -74,14 +74,27 @@ class BackendClient:
         )
 
     # ------------------------------------------------------------------
-    # 取服務商的表單完整結構
-    # 對應 api_server GET /vendors/{id}/forms/full（需 bff_server 補一支轉發）
+    # 取某服務項目對應表單的完整結構
+    # 對應 GET /app-api/services/{service_id}/form/full
+    #
+    # 為什麼用 service_id 而不是 vendor_id：表單是掛在服務項目上的
+    # （cms_homepage_service.form_id），不是掛在商家上。實際資料裡同一個
+    # 商家名下可能有十幾張表單（含測試用的、給別的服務用的），
+    # 用 vendor 反查沒有可靠依據挑出正確那張。
     # ------------------------------------------------------------------
-    async def get_vendor_forms(self, service_vendor_id: int) -> list[dict[str, Any]]:
+    async def get_service_form(self, service_id: int) -> dict[str, Any] | None:
+        """回傳 {form, groups, topics}；該服務沒設定表單時回 None。"""
         if not self._enabled:
-            return _stub_forms(service_vendor_id)
+            return _stub_form_for_service(service_id)
 
-        return await self._get(f"/app-api/vendors/{service_vendor_id}/forms/full")
+        try:
+            return await self._get(f"/app-api/services/{service_id}/form/full")
+        except BackendError as exc:
+            # BFF 對「服務不存在」與「form_id 為 NULL」都回 404。
+            # 這是預期內的狀態，不該讓整輪對話爆掉，讓 tool 回可讀的錯誤給模型。
+            if "404" in str(exc):
+                return None
+            raise
 
     # ------------------------------------------------------------------
     # 會員資料，用來自動填聯絡資訊
@@ -107,8 +120,10 @@ _STUB_VENDORS: dict[str, list[dict[str, Any]]] = {
             "matched_services": [
                 {
                     "id": 6001,
+                    "service_vendor_id": 101,
                     "type": "6",
                     "name": "晚餐訂位",
+                    "form_id": 9001,
                     "img_url": "https://example.com/izakaya.jpg",
                 }
             ],
@@ -120,8 +135,10 @@ _STUB_VENDORS: dict[str, list[dict[str, Any]]] = {
             "matched_services": [
                 {
                     "id": 6002,
+                    "service_vendor_id": 102,
                     "type": "6",
                     "name": "無菜單套餐訂位",
+                    "form_id": 9002,
                     "img_url": "https://example.com/teppanyaki.jpg",
                 }
             ],
@@ -135,8 +152,10 @@ _STUB_VENDORS: dict[str, list[dict[str, Any]]] = {
             "matched_services": [
                 {
                     "id": 2001,
+                    "service_vendor_id": 201,
                     "type": "2",
                     "name": "洗衣機槽清洗",
+                    "form_id": 9003,
                     "img_url": "https://example.com/washer.jpg",
                 }
             ],
@@ -161,9 +180,10 @@ def _stub_vendors(service_type: str, label_ids: list[int] | None) -> list[dict[s
 
 
 # 表單結構照 GET /forms/{form_id}/full 的形狀：{form, groups, topics}
+# key 是 service_id（對齊真實的 cms_homepage_service.form_id 關聯），不是 vendor_id
 # topic.type: 1簡答 2詳答 3單選 4複選 5地區選單 6上傳照片 7備註 8聯絡資料 9日期題 10聯絡資料(不含地址)
-_STUB_FORMS: dict[int, list[dict[str, Any]]] = {
-    101: [
+_STUB_FORMS: dict[int, dict[str, Any]] = {
+    6001: (
         {
             "form": {
                 "id": 9001,
@@ -209,8 +229,8 @@ _STUB_FORMS: dict[int, list[dict[str, Any]]] = {
                 },
             ],
         }
-    ],
-    102: [
+    ),
+    6002: (
         {
             "form": {
                 "id": 9002, "service_vendor_id": 102, "type": "1",
@@ -246,8 +266,8 @@ _STUB_FORMS: dict[int, list[dict[str, Any]]] = {
                 },
             ],
         }
-    ],
-    201: [
+    ),
+    2001: (
         {
             "form": {
                 "id": 9003, "service_vendor_id": 201, "type": "2",
@@ -277,12 +297,12 @@ _STUB_FORMS: dict[int, list[dict[str, Any]]] = {
                 },
             ],
         }
-    ],
+    ),
 }
 
 
-def _stub_forms(service_vendor_id: int) -> list[dict[str, Any]]:
-    return _STUB_FORMS.get(service_vendor_id, [])
+def _stub_form_for_service(service_id: int) -> dict[str, Any] | None:
+    return _STUB_FORMS.get(service_id)
 
 
 def _stub_user(inbr_account_id: str) -> dict[str, Any]:

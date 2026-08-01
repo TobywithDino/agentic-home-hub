@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:uuid/uuid.dart';
 
+import 'package:ai_butler_app/data/remote/sse_client.dart';
 import 'package:ai_butler_app/domain/models/form_definition.dart';
 import 'package:ai_butler_app/domain/services/butler_ai_service.dart';
 
@@ -13,6 +15,12 @@ import 'package:ai_butler_app/domain/services/butler_ai_service.dart';
 /// AgentCore Runtime 只接受 SigV4(IAM) 驗證，前端拿不到 AWS 憑證，也不該拿。
 /// 所以 bff_server 用 EC2 instance role 代為呼叫，前端只看到一支普通 SSE 端點。
 ///
+/// 為什麼用 http + fetch_client 而不是專案既有的 dio：
+/// dio 在 Web 上走 XMLHttpRequest，不支援漸進式讀取 byte stream，
+/// `ResponseType.stream` 在瀏覽器拿不到資料並拋例外（原生平台正常，
+/// 所以會出現「curl 測得過、App 卻連線失敗」）。fetch_client 走 Fetch API
+/// 的 ReadableStream 才有真串流。詳見 sse_client_web.dart。
+///
 /// session 的兩層記憶：
 /// - `sessionId` 同一個聊天室固定不變 → agent 記得這段對話的前文
 /// - `inbr_account_id` 區分使用者 → 跨 session 的長期偏好（AgentCore Memory）
@@ -21,30 +29,44 @@ class HttpButlerAiService implements ButlerAiService {
     required String baseUrl,
     required this.getAccountId,
     ButlerAiService? fallback,
-    Dio? dio,
-  })  : _fallback = fallback,
-        _dio = dio ??
-            Dio(BaseOptions(
-              baseUrl: baseUrl,
-              connectTimeout: const Duration(seconds: 10),
-              // 串流會開很久，不能用一般的 receiveTimeout（20s）掐掉。
-              // 模型思考 + 多次 tool 往返可能超過一分鐘。
-              receiveTimeout: const Duration(minutes: 3),
-            ));
+    http.Client? client,
+  })  : _baseUrl = baseUrl.endsWith('/')
+            ? baseUrl.substring(0, baseUrl.length - 1)
+            : baseUrl,
+        _fallback = fallback,
+        _client = client ?? createSseClient();
 
-  final Dio _dio;
+  final String _baseUrl;
+  final http.Client _client;
   final String Function() getAccountId;
 
   /// `classify` / `prefill` / `explainTopic` 這三個能力目前由 agent 在對話中
   /// 一併完成，沒有獨立端點。傳入 mock 當備援，讓依賴它們的畫面不會壞掉。
   final ButlerAiService? _fallback;
 
-  /// 同一個 service 實例代表同一個聊天室，所以 session id 存在這裡。
-  /// 由伺服器在第一次回應時用 `X-Session-Id` 告知，之後每次都帶著走。
+  static const _uuid = Uuid();
+
+  /// 模型思考加多次 tool 往返可能超過一分鐘，不能用一般 API 的 20 秒逾時。
+  static const _timeout = Duration(minutes: 3);
+
+  /// 同一個 service 實例代表同一個聊天室，session id 存在這裡。
+  ///
+  /// **由客戶端自己產生**，不依賴伺服器回的 `X-Session-Id`。
+  /// 原因：瀏覽器預設不讓 JS 讀自訂回應標頭（要 CORS 的
+  /// `Access-Control-Expose-Headers` 才行），Flutter Web 上讀到的是 null，
+  /// 結果每輪都變成新對話、AI 管家完全沒有前文記憶。這個 bug 用 curl 測不出來。
+  ///
+  /// 「這是哪一段對話」本來就該由客戶端決定，不需要往返一趟才知道。
   String? _sessionId;
 
-  /// 開新對話（清掉聊天室時呼叫），下一次送出會取得新的 session。
+  /// AgentCore 要求 runtimeSessionId 至少 33 字元，太短會被拒絕。
+  /// UUID v4 含連字號是 36 字元，加前綴後更長，不會踩到邊界。
+  String _newSessionId() => 'app-${_uuid.v4()}';
+
+  /// 開新對話（清掉聊天室時呼叫），下一次送出會用新的 session。
   void resetSession() => _sessionId = null;
+
+  void dispose() => _client.close();
 
   @override
   Stream<ButlerChunk> send(String message) async* {
@@ -55,51 +77,62 @@ class HttpButlerAiService implements ButlerAiService {
       return;
     }
 
-    Response<ResponseBody> response;
-    try {
-      response = await _dio.post<ResponseBody>(
-        '/app-api/butler/chat',
-        data: <String, dynamic>{
-          'message': message,
-          'inbr_account_id': accountId,
-          if (_sessionId != null) 'session_id': _sessionId,
-        },
-        options: Options(
-          responseType: ResponseType.stream,
-          headers: <String, String>{'Accept': 'text/event-stream'},
-        ),
-      );
-    } on DioException catch (error) {
-      yield Failed(_messageOf(error));
-      yield const Done();
-      return;
-    }
+    // 第一輪就決定 session id 並固定下來，之後每輪都送同一個，
+    // agent 才能從 AgentCore Memory 撈到這段對話的前文。
+    _sessionId ??= _newSessionId();
 
-    // 伺服器可能產生新的 session id（首次對話或長度不足時），記下來延續對話
-    final assigned = response.headers.value('x-session-id');
-    if (assigned != null && assigned.isNotEmpty) {
-      _sessionId = assigned;
-    }
-
-    final body = response.data;
-    if (body == null) {
-      yield const Failed('AI 管家沒有回應');
-      yield const Done();
-      return;
-    }
-
+    // 整個流程包在 try 裡：所有錯誤都轉成 Failed chunk。
+    // 讓 stream 拋出例外的話，聊天室會走 onError 分支顯示「連線失敗」，
+    // 使用者看不到具體原因，也失去我們寫好的錯誤訊息。
     var sawDone = false;
     try {
-      await for (final line in _sseLines(body.stream)) {
+      final request = http.Request('POST', Uri.parse('$_baseUrl/app-api/butler/chat'))
+        // fetch_client 把 persistentConnection 對應到 Fetch 的 keepalive，
+        // 而 keepalive 是給「短命、可超出頁面生命週期」的請求用的，
+        // 還有 64KiB 上限。SSE 是長時間開著的串流，關掉才符合語意。
+        ..persistentConnection = false
+        ..headers.addAll(<String, String>{
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+        })
+        ..body = jsonEncode(<String, dynamic>{
+          'message': message,
+          'inbr_account_id': accountId,
+          'session_id': _sessionId,
+        });
+
+      final response = await _client.send(request).timeout(_timeout);
+
+      if (response.statusCode != 200) {
+        final body = await response.stream.bytesToString();
+        if (kDebugMode) {
+          debugPrint('[butler] HTTP ${response.statusCode}: $body');
+        }
+        yield Failed(_messageForStatus(response.statusCode));
+        yield const Done();
+        return;
+      }
+
+      // 伺服器若換了 session id 就以它為準（正常情況會跟送出的一致）。
+      // Web 上這個標頭要 bff_server 設 expose_headers 才讀得到；
+      // 讀不到也沒關係，id 是客戶端產生的，本來就已經固定。
+      final assigned = response.headers['x-session-id'];
+      if (assigned != null && assigned.isNotEmpty && assigned != _sessionId) {
+        if (kDebugMode) debugPrint('[butler] 伺服器改用 session id: $assigned');
+        _sessionId = assigned;
+      }
+
+      await for (final line in _sseLines(response.stream)) {
         for (final chunk in _mapEvent(line)) {
           if (chunk is Done) sawDone = true;
           yield chunk;
         }
       }
-    } catch (error) {
-      yield const Failed('連線中斷，請重試');
-      yield const Done();
-      return;
+    } on TimeoutException {
+      yield const Failed('AI 管家回應逾時，請重試');
+    } catch (error, stack) {
+      if (kDebugMode) debugPrint('[butler] 串流失敗: $error\n$stack');
+      yield const Failed('連不上 AI 管家，請確認網路後重試');
     }
 
     // 伺服器沒送 done 就斷線時補一個，否則 UI 會一直停在串流中狀態
@@ -153,7 +186,9 @@ class HttpButlerAiService implements ButlerAiService {
     switch (event['type'] as String?) {
       case 'text_delta':
         final text = event['text'] as String? ?? '';
-        return text.isEmpty ? const <ButlerChunk>[] : <ButlerChunk>[TextDelta(text)];
+        return text.isEmpty
+            ? const <ButlerChunk>[]
+            : <ButlerChunk>[TextDelta(text)];
 
       case 'ui':
         return _mapUiComponent(event);
@@ -223,14 +258,11 @@ class HttpButlerAiService implements ButlerAiService {
         _ => null,
       };
 
-  String _messageOf(DioException error) {
-    return switch (error.type) {
-      DioExceptionType.connectionTimeout ||
-      DioExceptionType.connectionError =>
-        '連不上 AI 管家，請確認網路後重試',
-      DioExceptionType.receiveTimeout => 'AI 管家回應逾時，請重試',
-      _ => 'AI 管家暫時無法回應，請稍後再試',
-    };
+  String _messageForStatus(int status) {
+    if (status == 422) return '訊息格式有問題，請換個說法';
+    if (status == 404) return 'AI 管家服務尚未上線（端點不存在）';
+    if (status >= 500) return 'AI 管家暫時無法回應，請稍後再試';
+    return 'AI 管家回應失敗（HTTP $status）';
   }
 
   // ---------------------------------------------------------------------
