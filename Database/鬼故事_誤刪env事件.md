@@ -148,12 +148,17 @@ sudo systemctl restart aiwave-api
 - ✅ RDS 密碼已重設，新密碼存於 EC2 `/home/ssm-user/aiwave/api_server/.env`
 - ✅ PII 金鑰已重新產生並生效
 - ✅ 7 筆種子測試帳號 PII 已用新金鑰補寫恢復
+- ✅ `.kiro/steering/project-overview.md` 加入 EC2 部署安全規則（`inclusion: always`，範圍明確限定於 SSM 部署指令，禁止對 `api_server/`/`database/`/`bff_server/` 整個目錄執行 `rm -rf`）
+- ✅ `PG_PASSWORD`/`PII_ENCRYPTION_KEY_B64` 已備份至 SSM Parameter Store（方案B，詳見下方待辦清單第一項），`Database/AWS操作手冊.md` 新增「5.2」小節說明同步備份流程
 
 ## 待辦（尚未完成，建議排進上線前檢查清單）
 
-- [ ] 把 `PG_PASSWORD` / `PII_ENCRYPTION_KEY_B64` 改用 AWS Secrets Manager 或 SSM Parameter Store 管理，`.env` 不再是唯一存放處
+- [x] ~~把 `PG_PASSWORD` / `PII_ENCRYPTION_KEY_B64` 改用 AWS Secrets Manager 或 SSM Parameter Store 管理，`.env` 不再是唯一存放處~~
+  **已完成（方案B，2026-08-02）**：評估過兩個方向——方案A 是讓 `api_server` 程式碼在啟動時直接呼叫 AWS SDK 讀取 Secrets Manager/Parameter Store（徹底移除 `.env` 依賴，但需要改核心啟動邏輯、多一個外部依賴故障點、需要幫 EC2 role 加新權限）；方案B 是 `.env` 維持原樣，額外把兩個值備份一份到 SSM Parameter Store（`SecureString`），純粹當救援手段，不改程式碼。
+  考量這是 workshop 臨時帳號、專案仍在快速迭代、方案A 的複雜度與現階段風險不成比例，採用**方案B**。已將 `PG_PASSWORD`、`PII_ENCRYPTION_KEY_B64` 備份至 `/aiwave/api_server/PG_PASSWORD`、`/aiwave/api_server/PII_ENCRYPTION_KEY_B64`（SSM Parameter Store，SecureString），並驗證可正確解密讀回。同步備份的操作步驟寫進 `Database/AWS操作手冊.md` 新增的「5.2 改了 `.env` 之後：同步備份到 SSM Parameter Store」小節，且在第6節部署流程加了提醒。
+  **注意這不是自動化機制**：`.env` 跟 Parameter Store 備份之間沒有同步機制，下次改密碼/金鑰後必須記得手動跑一次 `put-parameter` 更新備份，否則備份會過期。這個限制已寫在手冊裡，也是方案B 相對方案A 的已知取捨（用維護紀律換取不動程式碼的低風險）。
 - [ ] 通知所有隊友：舊的 RDS 密碼已失效，需要用新密碼的人請跟保管憑證的人要（不要在群組聊天貼明文）
-- [ ] 若之後真的接上正式用戶資料，PII 金鑰管理必須先解決備份問題，不能重演這次「只能靠重新補寫測試資料掩蓋過去」的僥倖結局
+- [ ] 若之後真的接上正式用戶資料，PII 金鑰管理必須先解決備份問題，不能重演這次「只能靠重新補寫測試資料掩蓋過去」的僥倖結局（届時應重新評估方案A，備份機制本身也要考慮存取控制——目前任何拿到 AWS 憑證的人都能讀出 Parameter Store 裡的明文，跟直接讀 `.env` 的曝露面差異有限）
 
 ---
 
