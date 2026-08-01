@@ -89,6 +89,39 @@ async def find_vendors_by_service(
     return vendors
 
 
+@router.get("/vendors/{service_vendor_id}/services")
+async def list_vendor_services(
+    service_vendor_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某個廠商提供的所有服務項目
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID（從 `find_vendors_by_service` 回傳的 `id` 取得）
+
+    **輸出**：服務項目陣列
+    ```json
+    [
+      {
+        "id": 17,
+        "service_vendor_id": 1,
+        "type": "10",
+        "name": "水電修繕-一般維修",
+        "img_url": "https://...",
+        "description": "服務項目描述"
+      }
+    ]
+    ```
+
+    **說明**
+
+    前端在找到廠商後，點進廠商詳情頁時呼叫此 API 取得該廠商的所有服務項目
+    （不限 service_type，回傳該 vendor 名下全部 service）。
+    """
+    resp = await db_api.get("/services", params={"service_vendor_id": service_vendor_id, "limit": 200})
+    return resp.json()["items"]
+
+
 @router.post("/feedbacks", status_code=201)
 async def create_feedback(
     payload: dict,
