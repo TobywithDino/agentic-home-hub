@@ -15,6 +15,10 @@
 
 ## 1. 整體架構
 
+> 完整、含全部欄位型別的 ER 圖見 `schema.dbml`（DBML原始碼）與渲染好的 `schema.svg`/`schema.png`。
+> 改資料庫結構時請同步更新 `schema.dbml`，再用
+> `npx @softwaretechnik/dbml-renderer -i schema.dbml -o schema.svg` 重新產圖。
+
 18 張表分成 8 個功能群組，彼此用「值相等」關聯（**沒有實體 FOREIGN KEY 約束**，是刻意的鬆耦合設計，跨表一致性由應用層負責）：
 
 ```

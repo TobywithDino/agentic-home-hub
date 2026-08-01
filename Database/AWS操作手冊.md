@@ -11,6 +11,7 @@
 3. [直接呼叫 API（不需要進 EC2）](#3-直接呼叫-api不需要進-ec2)
 4. [連進 EC2（用 SSM，不需要 SSH key）](#4-連進-ec2用-ssm不需要-ssh-key)
 5. [檢查 / 重啟 API service](#5-檢查--重啟-api-service)
+5.1. [補寫種子測試帳號的 PII 明文（`patch_test_pii.ps1`）](#51-補寫種子測試帳號的-pii-明文patch_test_piips1)
 6. [更新程式碼（重新部署新版本）](#6-更新程式碼重新部署新版本)
 7. [連線資料庫（RDS）](#7-連線資料庫rds)
    - [7.1 從 EC2 內部連](#71-從-ec2-內部連先連進-ec2-再操作)
@@ -149,6 +150,46 @@ sudo systemctl restart aiwave-api
 # 看目前使用的資料庫連線設定
 cat /home/ssm-user/aiwave/api_server/.env
 ```
+
+## 5.1 補寫種子測試帳號的 PII 明文（`patch_test_pii.ps1`）
+
+**背景**：種子資料建置時 `PII_ENCRYPTION_KEY_B64` 是空的，所以 `user_accounts`/`vendor_accounts` 的
+`contact_name`/`contact_mobile`/`contact_email` 一律存 `NULL`（`_hash` 欄位不受影響，永遠有值）。
+設定好金鑰、重啟 `aiwave-api` 之後，**舊種子資料依然是 `NULL`**——加密金鑰只影響「金鑰設定之後」新寫入的資料，
+不會回頭補全歷史資料。`Database/patch_test_pii.ps1` 就是用來一次性補寫這 7 筆種子帳號（`user01`~`04`、
+`vendor01`~`03`）的測試用個資明文，讓demo時個人資料頁面有東西可以顯示。
+
+**前置條件**（缺一都會白做）：
+1. EC2 上 `/home/ssm-user/aiwave/api_server/.env` 的 `PII_ENCRYPTION_KEY_B64` 已設定非空值（見上方第5節如何連進 EC2 修改）
+2. 改完 `.env` 後已執行 `sudo systemctl restart aiwave-api` 讓新金鑰生效
+3. 本機能連上 `http://52.10.163.115:8000`（第3節的連線方式）
+
+若金鑰還沒設定就執行此腳本，PATCH 會回 200 成功，但 `contact_name` 等欄位仍會被 `encrypt_pii()` 短路寫成
+`NULL`，只有 `_hash` 欄位會被覆蓋更新，等於做了白工還順便弄髒 hash，記得先確認金鑰狀態再跑。
+
+**用法**（在本機 PowerShell，不需要連進 EC2）：
+
+```powershell
+powershell -File Database\patch_test_pii.ps1
+# 或指定不同的 api_server base url：
+powershell -File Database\patch_test_pii.ps1 -BaseUrl "http://52.10.163.115:8000"
+```
+
+腳本會依序對以下 7 個帳號呼叫 `PATCH /users/{id}` 或 `PATCH /vendors/{service_vendor_id}/accounts/{id}`，
+填入固定的測試用假資料（非真實個資，格式為「測試會員0X」/「測試商家聯絡人0X」+ 假手機號）：
+
+| 帳號 | 對應 API |
+|---|---|
+| user01~04@example.com | `PATCH /users/{inbr_account_id}` |
+| vendor01~03@example.com | `PATCH /vendors/{service_vendor_id}/accounts/{account_id}` |
+
+**驗證**：腳本執行後會印出每筆 PATCH 的回應，檢查 `contact_name` 欄位是否為明文（非 `null`）即可確認金鑰生效。
+若終端機顯示中文亂碼（PowerShell 主控台編碼問題，非資料損毀），改用 `curl.exe ... -o out.json` 存檔後
+用文字編輯器開啟確認即可。
+
+⚠️ 這是一次性補寫腳本，帳號 id 是寫死對應 `database/帳號與標籤範例資料.json` 裡的既有種子資料，重新
+`import_seed_data.py` 建置全新資料庫後 id 不會變，可以重複執行；但若之後種子資料內容有異動（新增/刪除帳號），
+腳本內容需要同步更新。
 
 ## 6. 更新程式碼（重新部署新版本）
 

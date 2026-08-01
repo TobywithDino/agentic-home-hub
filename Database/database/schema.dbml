@@ -1,0 +1,490 @@
+// ============================================================================
+// 智慧社區服務需求理解與媒合平台 — 資料庫結構圖（DBML）
+//
+// 本檔案取代已過舊的 Database/AI指示文件/newDBstruct.jpg。
+// 內容依 Database/database/README.md 第1節「整體架構」與各 *.sql DDL 撰寫。
+//
+// 重要：資料庫本身「沒有」實體 FOREIGN KEY 約束（刻意的鬆耦合設計，
+// 見 README.md），下方的 Ref 關聯線是依 README.md 記載的「值相等」關聯
+// 手動補上的，用於繪圖與理解資料流向，不代表資料庫實際存在約束。
+//
+// 產圖方式：
+//   npx @softwaretechnik/dbml-renderer -i schema.dbml -o schema.svg
+// 或貼到 https://dbdiagram.io 線上檢視。
+//
+// 修改資料庫結構時，請同步更新本檔案（比照 project-overview.md 的
+// steering 自我維護規則）。
+// ============================================================================
+
+Project agentic_home_hub {
+  database_type: 'PostgreSQL'
+  Note: '18張表，8個功能群組，無實體FK約束，關聯皆為值相等，由應用層(api_server)負責一致性'
+}
+
+// ----------------------------------------------------------------------------
+// A. 縣市/行政區（縣市區域檔.sql）
+// ----------------------------------------------------------------------------
+Table sys_county {
+  code varchar(2) [pk, note: '縣市代碼']
+  name varchar(10) [not null]
+  sort int4 [not null]
+  is_deleted varchar(2) [not null, note: '0正常/1刪除']
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+
+  Note: '縣市代碼參考資料（22筆），供表單地區選單題型與地址欄位使用'
+}
+
+Table sys_district {
+  code varchar(3) [pk, note: '行政區代碼']
+  county_code varchar(2) [not null]
+  name varchar(20) [not null]
+  name_with_county varchar(20) [not null]
+  zip varchar(6) [not null]
+  sort int4 [not null]
+  is_deleted varchar(2) [not null]
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+
+  Note: '行政區代碼參考資料（200筆）'
+}
+
+Ref: sys_district.county_code > sys_county.code
+
+// ----------------------------------------------------------------------------
+// B. 服務商 / 服務項目主檔（cms_homepage_service.sql）
+// ----------------------------------------------------------------------------
+Table cms_homepage_service_vendor {
+  id int4 [pk, note: '服務商ID，手動指定，非自增']
+  name varchar(50) [not null]
+  description varchar(200)
+
+  Note: '首頁服務商主檔（6筆），結構最簡單，無時間戳/操作者欄位'
+}
+
+Table cms_homepage_service {
+  id int4 [pk, note: '服務項目ID，手動指定']
+  service_vendor_id int4 [not null, note: '對應cms_homepage_service_vendor.id']
+  type varchar(2) [not null, note: '1居家清潔/2家電清洗/3包裹寄送/6餐廳訂位/9美食外送/10水電修繕/11商城購物']
+  name varchar(100) [not null]
+  img_url varchar(500)
+  description text
+  form_id int4 [note: '對應諮詢表單pms_form.id，nullable，多個service可共用同一form_id（新增功能）']
+
+  Note: '首頁服務項目主檔（8筆）'
+}
+
+Ref: cms_homepage_service.service_vendor_id > cms_homepage_service_vendor.id
+Ref: cms_homepage_service.form_id > pms_form.id
+
+// ----------------------------------------------------------------------------
+// C. 標籤與帳號（account_and_label.sql）
+// ----------------------------------------------------------------------------
+Table label {
+  id serial4 [pk]
+  name varchar(50) [not null]
+  sort int4 [not null, default: 0]
+  is_enable varchar(2) [not null]
+  is_deleted varchar(2) [not null]
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+  service_type varchar(2) [note: '對應cms_homepage_service.type，NULL=通用標籤，有值=該類型專屬標籤（新增功能）']
+
+  indexes {
+    (service_type, name) [unique, name: 'label_name_type_key']
+  }
+
+  Note: '服務特徵標籤主檔（8筆）。UNIQUE(service_type,name)；通用標籤另用partial unique index保證全域唯一'
+}
+
+Table service_label {
+  service_id int4 [not null, note: '對應cms_homepage_service.id']
+  label_id int4 [not null, note: '對應label.id']
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+
+  indexes {
+    (service_id, label_id) [pk]
+  }
+
+  Note: '服務與標籤多對多橋接表（11筆）'
+}
+
+Ref: service_label.service_id > cms_homepage_service.id
+Ref: service_label.label_id > label.id
+
+Table vendor_accounts {
+  id uuid [pk]
+  service_vendor_id int4 [not null, note: '對應cms_homepage_service_vendor.id']
+  account varchar(100) [not null, unique]
+  password_hash varchar(255) [not null, note: 'bcrypt雜湊']
+  contact_name bytea [note: 'AES-256-GCM加密']
+  contact_name_hash varchar(50)
+  contact_mobile bytea [note: 'AES-256-GCM加密']
+  contact_mobile_hash varchar(50)
+  contact_email bytea [note: 'AES-256-GCM加密']
+  contact_email_hash varchar(50)
+  is_2fa_enabled varchar(2) [not null, default: '0']
+  totp_secret varchar(255)
+  last_login_time timestamptz
+  is_enable varchar(2) [not null]
+  is_deleted varchar(2) [not null]
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+
+  Note: '服務商後台管理帳號（3筆），一個service_vendor_id可有多個帳號'
+}
+
+Ref: vendor_accounts.service_vendor_id > cms_homepage_service_vendor.id
+
+Table user_accounts {
+  id uuid [pk, note: '即inbr_account_id，串接訂單與諮詢單']
+  account varchar(100) [not null, unique]
+  password_hash varchar(255) [not null]
+  contact_name bytea [note: 'AES-256-GCM加密']
+  contact_name_hash varchar(50)
+  contact_mobile bytea [note: 'AES-256-GCM加密']
+  contact_mobile_hash varchar(50)
+  contact_email bytea [note: 'AES-256-GCM加密']
+  contact_email_hash varchar(50)
+  is_2fa_enabled varchar(2) [not null, default: '0']
+  totp_secret varchar(255)
+  last_login_time timestamptz
+  is_enable varchar(2) [not null]
+  is_deleted varchar(2) [not null]
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+
+  Note: '會員登入帳號（4筆）'
+}
+
+// ----------------------------------------------------------------------------
+// F. 表單結構（諮詢單相關table.sql）
+// ----------------------------------------------------------------------------
+Table pms_form {
+  id serial4 [pk]
+  service_vendor_id int4 [not null]
+  type varchar(2) [not null, note: '1C端無評估/2C端需評估/3B端/4轉訂單流程/5客服']
+  sub_type varchar(2) [not null, note: '1一般表單/2估價表單']
+  name varchar(50) [not null]
+  intro_content text
+  notice_content text
+  terms_content text
+  review_status varchar(2) [not null, note: '0未審核/1已審核']
+  reviewed_id uuid
+  reviewed_time timestamptz
+  is_enable varchar(2) [not null]
+  is_deleted varchar(2) [not null]
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+  feature jsonb
+
+  Note: '表單主檔（1筆種子資料）'
+}
+
+Ref: pms_form.service_vendor_id > cms_homepage_service_vendor.id
+
+Table pms_form_group {
+  id serial4 [pk]
+  form_id int4 [not null]
+  name varchar(50) [not null]
+  sort int4 [not null]
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+  feature jsonb
+
+  Note: '表單題組主檔（3筆），無is_deleted欄位（實體刪除）'
+}
+
+Ref: pms_form_group.form_id > pms_form.id
+
+Table pms_form_topic {
+  id serial4 [pk]
+  form_id int4 [not null]
+  form_group_id int4 [not null]
+  type varchar(2) [not null, note: '1簡答/2詳答/3單選/4複選/5地區選單/6上傳照片/7備註/8聯絡資料/9日期/10聯絡資料(不含地址)']
+  title varchar(200) [not null]
+  remark varchar(500)
+  is_required varchar(2) [not null]
+  sort int4 [not null]
+  is_number_only varchar(2)
+  minimum_medias_upload int4
+  maximum_medias_upload int4
+  specified_medias_upload int4
+  start_date_offset_days int4
+  end_date_offset_days int4
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+  feature jsonb
+
+  Note: '表單題目主檔（7筆），無is_deleted欄位（實體刪除）'
+}
+
+Ref: pms_form_topic.form_id > pms_form.id
+Ref: pms_form_topic.form_group_id > pms_form_group.id
+
+Table pms_topic_media {
+  id serial4 [pk]
+  form_id int4 [not null]
+  topic_id int4 [not null]
+  img_url text [not null]
+  sort int4 [not null]
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+
+  Note: '表單題目輔助圖片（1筆）。⚠️種子資料topic_id=108為孤兒資料，不在pms_form_topic種子範圍內'
+}
+
+Ref: pms_topic_media.form_id > pms_form.id
+Ref: pms_topic_media.topic_id > pms_form_topic.id
+
+Table pms_topic_option {
+  id serial4 [pk]
+  form_id int4 [not null]
+  topic_id int4 [not null]
+  option_name varchar(200) [not null]
+  unit_price int4
+  unit varchar(30)
+  is_quantity varchar(2)
+  min_quantity int4
+  max_quantity int4
+  is_quoted_separately varchar(2)
+  remark varchar(500)
+  sort int4 [not null]
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+  feature jsonb
+
+  Note: '表單選項主檔（6筆）'
+}
+
+Ref: pms_topic_option.form_id > pms_form.id
+Ref: pms_topic_option.topic_id > pms_form_topic.id
+
+Table pms_topic_county_district_relation {
+  form_id int4 [not null]
+  topic_id int4 [not null]
+  eff_ts_from timestamptz [not null]
+  eff_ts_to timestamptz [not null]
+  county_code varchar(2) [not null]
+  district_code varchar(3) [not null]
+  upd_time timestamptz [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  cre_id uuid [not null]
+
+  indexes {
+    (form_id, topic_id, eff_ts_from, county_code, district_code) [pk]
+  }
+
+  Note: '題目縣市行政區對應檔（1筆），複合主鍵無單一id'
+}
+
+Ref: pms_topic_county_district_relation.form_id > pms_form.id
+Ref: pms_topic_county_district_relation.topic_id > pms_form_topic.id
+Ref: pms_topic_county_district_relation.county_code > sys_county.code
+Ref: pms_topic_county_district_relation.district_code > sys_district.code
+
+Table pms_form_feedback {
+  feedback_no varchar(16) [pk, note: '回饋單號']
+  service_id int4 [not null]
+  platform_code varchar(2) [not null, note: '01=OP APP']
+  form_id int4 [not null]
+  feedback_content jsonb [not null]
+  form_type varchar(2) [not null]
+  is_read varchar(2) [not null]
+  status varchar(2) [not null]
+  contact_name bytea [note: 'AES-256-GCM加密']
+  contact_name_hash varchar(50)
+  contact_mobile bytea [note: 'AES-256-GCM加密']
+  contact_mobile_hash varchar(50)
+  contact_landline bytea [note: 'AES-256-GCM加密']
+  contact_landline_hash varchar(50)
+  contact_email bytea [note: 'AES-256-GCM加密']
+  contact_email_hash varchar(50)
+  preferred_contact_time varchar(2) [note: '1上午/2下午/3皆可']
+  contact_address_county varchar(10)
+  contact_address_district varchar(20)
+  contact_address_detail bytea [note: 'AES-256-GCM加密']
+  contact_address_detail_hash varchar(50)
+  description varchar(1000)
+  inbr_account_id uuid [not null]
+  cre_time timestamptz [not null]
+  upd_id uuid
+  upd_time timestamptz [not null]
+
+  Note: '表單回饋檔（1筆），使用者填單後的紀錄，無is_deleted欄位'
+}
+
+Ref: pms_form_feedback.service_id > cms_homepage_service.id
+Ref: pms_form_feedback.form_id > pms_form.id
+Ref: pms_form_feedback.inbr_account_id > user_accounts.id
+Ref: pms_form_feedback.contact_address_county > sys_county.code
+Ref: pms_form_feedback.contact_address_district > sys_district.code
+
+// ----------------------------------------------------------------------------
+// G. 訂單（mms_order_record.sql）
+// ----------------------------------------------------------------------------
+Table mms_order_record {
+  record_id bigserial [pk]
+  order_no varchar(50) [not null]
+  service_vendor_id int4 [not null]
+  service_id int4 [not null]
+  platform_code varchar(2) [not null]
+  inbr_account_id uuid [not null]
+  member_name bytea [note: 'AES-256-GCM加密']
+  member_name_hash varchar(50)
+  member_phone bytea [note: 'AES-256-GCM加密']
+  member_phone_hash varchar(50)
+  member_email bytea [note: 'AES-256-GCM加密']
+  member_email_hash varchar(50)
+  order_type varchar(2) [not null, note: '01服務訂單/02訂位/03預約/04其他/05商品訂單/06訂餐']
+  order_status varchar(2) [not null]
+  order_time timestamptz [not null]
+  deposit_time timestamptz
+  confirm_time timestamptz
+  service_time timestamptz
+  complete_time timestamptz
+  cancel_time timestamptz
+  deposit_amount "numeric(10,2)" [not null, default: 0]
+  original_amount "numeric(10,2)" [not null, default: 0]
+  discount_amount "numeric(10,2)" [not null, default: 0]
+  shipping_fee_amount "numeric(10,2)" [not null, default: 0]
+  final_amount "numeric(10,2)" [not null, default: 0]
+  refund_amount "numeric(10,2)" [not null, default: 0]
+  order_points "numeric(10,2)" [not null, default: 0]
+  used_points "numeric(10,2)" [not null, default: 0]
+  refund_points "numeric(10,2)" [not null, default: 0]
+  earn_points "numeric(10,2)" [not null, default: 0]
+  point_status varchar(2) [not null, default: '01']
+  point_grant_time timestamptz
+  vendor_data jsonb
+  order_items jsonb
+  remark text
+  cancel_reason text
+  refund_reason text
+  source_file varchar(200)
+  import_batch varchar(50)
+  quote_approved_by uuid
+  quote_approved_time timestamptz
+  quote_no varchar(64)
+  comment_status varchar(2) [not null, default: '00', note: '00無須評價/01未評價/02已評價']
+  is_deleted bool [not null, default: false]
+  cre_id uuid [not null]
+  cre_time timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+  upd_id uuid [not null]
+  upd_time timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (order_no, service_id) [unique]
+  }
+
+  Note: '訂單/訂位統一紀錄表（99筆），資料量最大、欄位最多的表'
+}
+
+Ref: mms_order_record.service_vendor_id > cms_homepage_service_vendor.id
+Ref: mms_order_record.service_id > cms_homepage_service.id
+Ref: mms_order_record.inbr_account_id > user_accounts.id
+
+// ----------------------------------------------------------------------------
+// H. 訂單評價（mms_order_review.sql，新增功能）
+// ----------------------------------------------------------------------------
+Table mms_order_review {
+  record_id bigint [pk, note: '直接沿用mms_order_record.record_id，無獨立序列，1:0..1對應']
+  order_no varchar(50) [not null, note: '冗餘欄位']
+  service_vendor_id int4 [not null, note: '冗餘欄位']
+  service_id int4 [not null, note: '冗餘欄位']
+  inbr_account_id uuid [not null]
+  overall_rating int4 [not null, note: '1~5星']
+  rating_detail jsonb [note: '例如{"service":5,"attitude":4}']
+  review_content text
+  media jsonb [note: '照片/影片網址陣列']
+  status varchar(2) [not null, default: '01', note: '01已送出/02已隱藏']
+  is_deleted bool [not null, default: false]
+  cre_id uuid [not null]
+  cre_time timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+  upd_id uuid
+  upd_time timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+
+  Note: '訂單評價單（5筆），一筆訂單至多一筆評價，由PK天然保證'
+}
+
+// record_id 為 1:1 借用主鍵，非一般FK方向，畫成一對一關聯
+Ref: mms_order_review.record_id - mms_order_record.record_id
+Ref: mms_order_review.service_vendor_id > cms_homepage_service_vendor.id
+Ref: mms_order_review.service_id > cms_homepage_service.id
+Ref: mms_order_review.inbr_account_id > user_accounts.id
+
+// ----------------------------------------------------------------------------
+// I. 評價AI摘要（mms_review_summary.sql，新增功能，目前無種子資料）
+// ----------------------------------------------------------------------------
+Table mms_review_summary_service {
+  service_id int4 [pk, note: '與cms_homepage_service.id共用值，非獨立序列']
+  service_vendor_id int4 [not null, note: '冗餘欄位']
+  summary_content text
+  summary_highlights jsonb [note: '例如{"pros":[...],"cons":[...]}']
+  sentiment_stats jsonb [note: '例如{"positive":12,"neutral":3,"negative":2}']
+  source_review_count int4 [not null, default: 0]
+  source_avg_rating "numeric(3,2)"
+  latest_review_cre_time timestamptz [note: '用於判斷摘要是否過期(is_stale)']
+  ai_model varchar(50)
+  generate_status varchar(2) [not null, default: '00', note: '00待生成/01生成中/02已完成/03失敗']
+  generate_time timestamptz
+  error_message text
+  is_deleted bool [not null, default: false]
+  cre_id uuid [not null]
+  cre_time timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+  upd_id uuid
+  upd_time timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+
+  Note: '服務項目評價AI摘要，覆寫式快取（同一service_id僅存最新1筆），面向使用者與供應商共用'
+}
+
+Ref: mms_review_summary_service.service_id - cms_homepage_service.id
+Ref: mms_review_summary_service.service_vendor_id > cms_homepage_service_vendor.id
+
+Table mms_review_summary_vendor {
+  service_vendor_id int4 [pk, note: '與cms_homepage_service_vendor.id共用值']
+  summary_content text
+  summary_highlights jsonb
+  sentiment_stats jsonb
+  service_breakdown jsonb [note: '例如[{"service_id":1,"review_count":10,"avg_rating":4.5}]']
+  source_review_count int4 [not null, default: 0]
+  source_avg_rating "numeric(3,2)"
+  latest_review_cre_time timestamptz
+  ai_model varchar(50)
+  generate_status varchar(2) [not null, default: '00']
+  generate_time timestamptz
+  error_message text
+  is_deleted bool [not null, default: false]
+  cre_id uuid [not null]
+  cre_time timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+  upd_id uuid
+  upd_time timestamptz [not null, default: `CURRENT_TIMESTAMP`]
+
+  Note: '供應商整合評價AI摘要，覆寫式快取，僅供供應商後台使用，橫跨其名下所有服務彙整'
+}
+
+Ref: mms_review_summary_vendor.service_vendor_id - cms_homepage_service_vendor.id
