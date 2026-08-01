@@ -30,8 +30,8 @@ agentic-home-hub/
         ├── config.py         環境變數設定
         ├── review_utils.py   共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
         └── routers/
-            ├── app_api.py       APP 前端呼叫的 11 支 API
-            └── merchant_api.py  商家後台呼叫的 17 支 API
+            ├── app_api.py       APP 前端呼叫的 13 支 API
+            └── merchant_api.py  商家後台呼叫的 20 支 API
 ```
 
 ## 架構
@@ -50,6 +50,14 @@ PostgreSQL (RDS)
 ```
 
 **重要原則**：`bff_server` 不直接碰資料庫，所有資料存取都透過呼叫 `Database/api_server` 完成。新增功能前先確認 `Database/api_server` 有沒有現成端點可以組合使用（見 `Database/API_Reference.md`），不要繞過這一層直接連 DB。
+
+⚠️ **開發前先觀察資料庫，不要憑記憶或猜測欄位結構**：這份文件下方「資料庫核心概念」只是摘要，隊友常會直接改 DB 加欄位（例如 `label.service_type`、`cms_homepage_service.form_id` 都是事後才加的），文件可能沒跟上最新狀態。實作任何跟資料庫欄位相關的功能前，先做以下至少一項確認：
+- 看 `Database/database/schema.png`（或 `schema.dbml`／`schema.svg`）目前的 ER 圖，確認表格欄位、型別、是否可為 NULL
+- 看對應的 `Database/database/*.sql`（DDL）裡的 `COMMENT ON COLUMN`，欄位代碼含義都寫在裡面
+- 看 `Database/api_server/app/schemas.py` 對應的 `XxxOut`/`XxxCreate`/`XxxUpdate`，確認 api_server 實際回傳/接受哪些欄位（有時 DB 有欄位但 schema 還沒開放）
+- 看 `Database/api_server/app/routers/*.py` 對應端點的查詢邏輯（例如 `GET /labels?service_type=` 是「專屬或通用」OR 邏輯，不是精確篩選，這種語意細節只有看程式碼才會知道）
+
+不要假設欄位名稱、型別或篩選邏輯，猜錯會導致產生的 API 語意跟資料庫實際設計不符。
 
 ## 目前部署狀態（AWS）
 
