@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.deploy.env
+deploy_lambda.sh
+.build/
+lambda_package.zip

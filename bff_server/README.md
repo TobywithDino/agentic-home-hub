@@ -21,8 +21,8 @@ PostgreSQL (RDS)
 
 ## 目前狀態
 
-- `app_api.py`：APP 前端呼叫的 13 支 API
-- `merchant_api.py`：商家後台呼叫的 20 支 API
+- `app_api.py`：APP 前端呼叫的 API
+- `merchant_api.py`：商家後台呼叫的 API（含評價 AI 摘要寫回端點）
 
 完整端點規格與範例見 `API.md`，或部署後開 Swagger UI (`/docs`) 互動測試。
 
@@ -62,8 +62,8 @@ app/
   main.py          FastAPI 應用程式入口
   review_utils.py  共用邏輯：把 mms_order_review 併入訂單物件的 review 欄位
   routers/
-    app_api.py       APP 前端呼叫的 13 支 API
-    merchant_api.py  商家後台呼叫的 20 支 API
+    app_api.py       APP 前端呼叫的 API
+    merchant_api.py  商家後台呼叫的 API
 ```
 
 ## 端點對應表
@@ -82,9 +82,10 @@ app/
 | 8 | POST | `/orders/{record_id}/review` | 對已完成訂單提交評價 |
 | 9 | PATCH | `/users/{inbr_account_id}/orders/{record_id}/review` | 修改自己提交過的評價 |
 | 10 | GET | `/services/{service_id}/reviews` | 某服務項目全部評價（完整內容，非公開評價牆） |
-| 11 | GET | `/users/{inbr_account_id}` | 取得會員個人資訊 |
-| 12 | PATCH | `/users/{inbr_account_id}` | 設定（更新）會員個人資訊 |
-| 13 | POST | `/auth/login` | APP 會員登入，回傳 inbr_account_id |
+| 11 | GET | `/services/{service_id}/review-summary` | 服務項目的評價 AI 摘要（轉發，含 is_stale 計算欄位） |
+| 12 | GET | `/users/{inbr_account_id}` | 取得會員個人資訊 |
+| 13 | PATCH | `/users/{inbr_account_id}` | 設定（更新）會員個人資訊 |
+| 14 | POST | `/auth/login` | APP 會員登入，回傳 inbr_account_id |
 
 ### 商家後台（prefix: `/merchant-api`）
 
@@ -109,7 +110,10 @@ app/
 | 17 | PATCH | `/vendors/{service_vendor_id}/orders/{record_id}` | 更新特定訂單（狀態/金額/時間） |
 | 18 | GET | `/vendors/{service_vendor_id}` | 取得商家資訊（商家屬性 + 管理帳號清單） |
 | 19 | PATCH | `/vendors/{service_vendor_id}` | 設定商家資訊（商家屬性 + 管理帳號聯絡方式） |
-| 20 | POST | `/auth/login` | 商家後台登入，回傳 service_vendor_id + account_id |
+| 20 | GET | `/vendors/{service_vendor_id}/review-summary` | 商家整合評價 AI 摘要（轉發，含 is_stale 計算欄位） |
+| 21 | PUT | `/services/{service_id}/review-summary` | 寫回服務項目評價 AI 摘要（純轉發，不呼叫 LLM） |
+| 22 | PUT | `/vendors/{service_vendor_id}/review-summary` | 寫回商家整合評價 AI 摘要（純轉發，不呼叫 LLM） |
+| 23 | POST | `/auth/login` | 商家後台登入，回傳 service_vendor_id + account_id |
 
 ## 注意事項
 

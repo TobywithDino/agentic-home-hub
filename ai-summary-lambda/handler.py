@@ -31,7 +31,7 @@ logger.setLevel(logging.INFO)
 # ── 環境變數（Lambda 設定，有預設值方便本地測試） ─────────────────────────────
 BFF_BASE_URL = os.environ.get("BFF_BASE_URL", "http://52.10.163.115:8100")
 BEDROCK_MODEL_ID = os.environ.get(
-    "BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 )
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-west-2")
 MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "2048"))
@@ -91,11 +91,13 @@ def _run_consumer_summaries(only_service_id: str | None) -> list[dict]:
 
     if only_service_id:
         service_ids = [int(only_service_id)]
-        service_names = {int(only_service_id): f"Service {only_service_id}"}
+        # 查實際服務名稱與 service_vendor_id
+        _, _names, _meta = _fetch_all_services()
+        sid = int(only_service_id)
+        service_names = {sid: _names.get(sid, f"Service {only_service_id}")}
+        service_names_meta = {sid: _meta.get(sid, {"service_vendor_id": None})}
     else:
-        # 拉出全平台所有服務項目（用 bff 的 api_server 直接查或用 /app-api 端點）
-        # 這裡用 api_server 直接列出所有服務（bff 沒有「列出全部服務」的 BFF 端點）
-        service_ids, service_names = _fetch_all_services()
+        service_ids, service_names, service_names_meta = _fetch_all_services()
 
     for service_id in service_ids:
         service_name = service_names.get(service_id, f"Service {service_id}")
@@ -116,6 +118,21 @@ def _run_consumer_summaries(only_service_id: str | None) -> list[dict]:
             "=" * 60,
             summary_text,
             "=" * 60,
+        )
+
+        # 計算寫回需要的聚合值
+        avg_rating = _calc_avg_rating(reviews)
+        latest_review_time = _calc_latest_review_time(reviews)
+        service_vendor_id = service_names_meta.get(service_id, {}).get("service_vendor_id")
+
+        # 寫回 DB（PUT /merchant-api/services/{service_id}/review-summary）
+        _upsert_service_summary(
+            service_id=service_id,
+            service_vendor_id=service_vendor_id,
+            summary_text=summary_text,
+            review_count=len(reviews),
+            avg_rating=avg_rating,
+            latest_review_time=latest_review_time,
         )
 
         summaries.append({
@@ -140,7 +157,10 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
 
     if only_vendor_id:
         vendor_ids = [int(only_vendor_id)]
-        vendor_names = {int(only_vendor_id): f"Vendor {only_vendor_id}"}
+        # 查實際商家名稱，避免 prompt 裡出現 "Vendor 1" 這種無意義佔位字
+        _, vendor_names = _fetch_all_vendors(vendor_id_filter=int(only_vendor_id))
+        if not vendor_names:
+            vendor_names = {int(only_vendor_id): f"Vendor {only_vendor_id}"}
     else:
         vendor_ids, vendor_names = _fetch_all_vendors()
 
@@ -165,6 +185,21 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
             "=" * 60,
         )
 
+        # 計算寫回需要的聚合值
+        avg_rating = _calc_avg_rating(reviews)
+        latest_review_time = _calc_latest_review_time(reviews)
+        service_breakdown = _calc_service_breakdown(reviews)
+
+        # 寫回 DB（PUT /merchant-api/vendors/{vendor_id}/review-summary）
+        _upsert_vendor_summary(
+            vendor_id=vendor_id,
+            summary_text=summary_text,
+            review_count=len(reviews),
+            avg_rating=avg_rating,
+            latest_review_time=latest_review_time,
+            service_breakdown=service_breakdown,
+        )
+
         summaries.append({
             "type": "merchant",
             "vendor_id": vendor_id,
@@ -178,8 +213,10 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
 
 # ── BFF HTTP calls ────────────────────────────────────────────────────────────
 
-def _fetch_all_services() -> tuple[list[int], dict[int, str]]:
-    """從 bff_server GET /merchant-api/services 拉出所有服務項目 id 與名稱。"""
+def _fetch_all_services() -> tuple[list[int], dict[int, str], dict[int, dict]]:
+    """從 bff_server GET /merchant-api/services 拉出所有服務項目。
+    回傳：(service_ids, {id: name}, {id: {service_vendor_id: ...}})
+    """
     try:
         resp = httpx.get(
             f"{BFF_BASE_URL}/merchant-api/services",
@@ -189,15 +226,21 @@ def _fetch_all_services() -> tuple[list[int], dict[int, str]]:
         items = resp.json()
         service_ids = [item["id"] for item in items]
         service_names = {item["id"]: item.get("name", f"Service {item['id']}") for item in items}
+        service_meta = {
+            item["id"]: {"service_vendor_id": item.get("service_vendor_id")}
+            for item in items
+        }
         logger.info("Fetched %d services from bff_server", len(service_ids))
-        return service_ids, service_names
+        return service_ids, service_names, service_meta
     except Exception as e:
         logger.error("Failed to fetch services: %s", e)
-        return [], {}
+        return [], {}, {}
 
 
-def _fetch_all_vendors() -> tuple[list[int], dict[int, str]]:
-    """從 bff_server GET /merchant-api/vendors 拉出所有服務商 id 與名稱。"""
+def _fetch_all_vendors(vendor_id_filter: int | None = None) -> tuple[list[int], dict[int, str]]:
+    """從 bff_server GET /merchant-api/vendors 拉出所有服務商 id 與名稱。
+    若指定 vendor_id_filter，只回傳該商家（單筆查詢用）。
+    """
     try:
         resp = httpx.get(
             f"{BFF_BASE_URL}/merchant-api/vendors",
@@ -205,6 +248,8 @@ def _fetch_all_vendors() -> tuple[list[int], dict[int, str]]:
         )
         resp.raise_for_status()
         items = resp.json()
+        if vendor_id_filter is not None:
+            items = [item for item in items if item["id"] == vendor_id_filter]
         vendor_ids = [item["id"] for item in items]
         vendor_names = {item["id"]: item.get("name", f"Vendor {item['id']}") for item in items}
         logger.info("Fetched %d vendors from bff_server", len(vendor_ids))
@@ -268,7 +313,7 @@ def _call_bedrock(prompt: str) -> str:
             inferenceConfig={
                 "maxTokens": MAX_TOKENS,
                 "temperature": 0.3,   # 摘要任務低溫，輸出穩定
-                "topP": 0.9,
+                # topP 不能與 temperature 並用（Claude Sonnet 4.x 限制）
             },
         )
         output_text = response["output"]["message"]["content"][0]["text"]
@@ -306,3 +351,98 @@ def _extract_params(event: dict) -> dict:
     # 過濾掉 EventBridge 自帶的 metadata key
     skip_keys = {"source", "detail-type", "detail", "id", "version", "account", "time", "region", "resources"}
     return {k: v for k, v in event.items() if k not in skip_keys}
+
+
+# ── 聚合計算 ──────────────────────────────────────────────────────────────────
+
+def _calc_avg_rating(reviews: list[dict]) -> float | None:
+    """計算評價平均分，無評價時回傳 None。"""
+    ratings = [r["overall_rating"] for r in reviews if r.get("overall_rating") is not None]
+    if not ratings:
+        return None
+    return round(sum(ratings) / len(ratings), 2)
+
+
+def _calc_latest_review_time(reviews: list[dict]) -> str | None:
+    """取最新一筆評價的 cre_time（ISO8601 字串），無評價時回傳 None。"""
+    times = [r["cre_time"] for r in reviews if r.get("cre_time")]
+    if not times:
+        return None
+    return max(times)
+
+
+def _calc_service_breakdown(reviews: list[dict]) -> list[dict]:
+    """依 service_id 分組，計算各服務項目的評價數與平均分。"""
+    from collections import defaultdict
+    groups: dict[int, list[int]] = defaultdict(list)
+    for r in reviews:
+        sid = r.get("service_id")
+        rating = r.get("overall_rating")
+        if sid is not None and rating is not None:
+            groups[sid].append(rating)
+    return [
+        {
+            "service_id": sid,
+            "review_count": len(ratings),
+            "avg_rating": round(sum(ratings) / len(ratings), 2),
+        }
+        for sid, ratings in groups.items()
+    ]
+
+
+# ── 寫回 DB ───────────────────────────────────────────────────────────────────
+
+def _upsert_service_summary(
+    service_id: int,
+    service_vendor_id: int | None,
+    summary_text: str,
+    review_count: int,
+    avg_rating: float | None,
+    latest_review_time: str | None,
+) -> None:
+    """PUT /merchant-api/services/{service_id}/review-summary 寫回服務項目摘要。"""
+    url = f"{BFF_BASE_URL}/merchant-api/services/{service_id}/review-summary"
+    body = {
+        "service_vendor_id": service_vendor_id,
+        "summary_content": summary_text,
+        "source_review_count": review_count,
+        "source_avg_rating": avg_rating,
+        "latest_review_cre_time": latest_review_time,
+        "ai_model": BEDROCK_MODEL_ID,
+        "generate_status": "02",  # 02 = 已完成
+        "error_message": None,
+    }
+    try:
+        resp = httpx.put(url, json=body, timeout=30)
+        resp.raise_for_status()
+        logger.info("[consumer] service_id=%d summary upserted (status=%d)", service_id, resp.status_code)
+    except Exception as e:
+        logger.error("[consumer] service_id=%d failed to upsert summary: %s", service_id, e)
+
+
+def _upsert_vendor_summary(
+    vendor_id: int,
+    summary_text: str,
+    review_count: int,
+    avg_rating: float | None,
+    latest_review_time: str | None,
+    service_breakdown: list[dict],
+) -> None:
+    """PUT /merchant-api/vendors/{vendor_id}/review-summary 寫回商家摘要。"""
+    url = f"{BFF_BASE_URL}/merchant-api/vendors/{vendor_id}/review-summary"
+    body = {
+        "summary_content": summary_text,
+        "service_breakdown": service_breakdown,
+        "source_review_count": review_count,
+        "source_avg_rating": avg_rating,
+        "latest_review_cre_time": latest_review_time,
+        "ai_model": BEDROCK_MODEL_ID,
+        "generate_status": "02",  # 02 = 已完成
+        "error_message": None,
+    }
+    try:
+        resp = httpx.put(url, json=body, timeout=30)
+        resp.raise_for_status()
+        logger.info("[merchant] vendor_id=%d summary upserted (status=%d)", vendor_id, resp.status_code)
+    except Exception as e:
+        logger.error("[merchant] vendor_id=%d failed to upsert summary: %s", vendor_id, e)

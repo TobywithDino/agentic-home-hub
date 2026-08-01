@@ -782,6 +782,142 @@ async def get_vendor_reviews(
     return reviews
 
 
+@router.put("/services/{service_id}/review-summary")
+async def upsert_service_review_summary(
+    service_id: int,
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """寫回服務項目的評價 AI 摘要（完整覆寫）
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+    - body（`ServiceReviewSummaryUpsert`）：
+    ```json
+    {
+      "service_vendor_id": 1,
+      "summary_content": "整體評價正向，顧客普遍稱讚服務態度與準時性...",
+      "summary_highlights": { "pros": ["態度好", "準時"], "cons": ["價格偏高"] },
+      "sentiment_stats": { "positive": 12, "neutral": 3, "negative": 2 },
+      "source_review_count": 17,
+      "source_avg_rating": 4.5,
+      "latest_review_cre_time": "2026-08-01T09:00:00Z",
+      "ai_model": "claude-3-5-sonnet",
+      "generate_status": "00=待生成 01=生成中 02=已完成 03=失敗",
+      "error_message": null
+    }
+    ```
+    `source_review_count`、`source_avg_rating`、`latest_review_cre_time`
+    應為呼叫端（AI 生成流程）當下查詢到的最新評價聚合值，與生成結果
+    一起送出；`generate_time` 由 api_server 端自動填入當前時間。
+
+    **輸出**：寫入後的完整摘要物件（`ServiceReviewSummaryOut`，含計算欄位
+    `is_stale`）。該 `service_id` 尚無摘要記錄時回 201（新建），已有記錄
+    時回 200（整包覆蓋）。
+
+    **說明**
+
+    給上層 AI 摘要生成流程（例如 Lambda）呼叫 Bedrock 等模型產生摘要後，
+    把結果寫回 `mms_review_summary_service`。此端點**不呼叫 LLM**，
+    純粹轉發到 api_server 對應端點做資料存取，覆寫式快取設計（同一
+    `service_id` 只保留最新 1 筆，不留歷史版本）。
+    """
+    resp = await db_api.put(f"/services/{service_id}/review-summary", json=payload)
+    return resp.json()
+
+
+@router.get("/vendors/{service_vendor_id}/review-summary")
+async def get_vendor_review_summary(
+    service_vendor_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得商家的整合評價 AI 摘要
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID
+
+    **輸出**（`VendorReviewSummaryOut`）
+    ```json
+    {
+      "service_vendor_id": 1,
+      "summary_content": "整體來看，該商家名下服務普遍獲得好評...",
+      "summary_highlights": { "pros": ["服務多樣", "口碑穩定"], "cons": [] },
+      "sentiment_stats": { "positive": 30, "neutral": 5, "negative": 3 },
+      "service_breakdown": [
+        { "service_id": 17, "review_count": 10, "avg_rating": 4.5 },
+        { "service_id": 18, "review_count": 8, "avg_rating": 4.2 }
+      ],
+      "source_review_count": 38,
+      "source_avg_rating": 4.4,
+      "latest_review_cre_time": "2026-08-01T09:00:00Z",
+      "ai_model": "claude-3-5-sonnet",
+      "generate_status": "00=待生成 01=生成中 02=已完成 03=失敗",
+      "generate_time": "...",
+      "error_message": null,
+      "is_stale": false
+    }
+    ```
+    `service_breakdown` 是橫跨該商家名下所有服務項目的評價數/平均分快取
+    陣列；`is_stale` 是計算欄位，即時比對 `mms_order_review` 目前的最新
+    聚合值，`true` 代表有新評價尚未納入這份摘要。
+
+    **說明**
+
+    給商家後台顯示「整合評價摘要」頁面用（僅供商家後台使用，橫跨其
+    名下所有服務彙整）。直接轉發 api_server 現成端點，未做額外處理。
+    尚未生成過摘要時回 404。
+    """
+    resp = await db_api.get(f"/vendors/{service_vendor_id}/review-summary")
+    return resp.json()
+
+
+@router.put("/vendors/{service_vendor_id}/review-summary")
+async def upsert_vendor_review_summary(
+    service_vendor_id: int,
+    payload: dict,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """寫回商家的整合評價 AI 摘要（完整覆寫）
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID
+    - body（`VendorReviewSummaryUpsert`）：
+    ```json
+    {
+      "summary_content": "整體來看，該商家名下服務普遍獲得好評...",
+      "summary_highlights": { "pros": ["服務多樣", "口碑穩定"], "cons": [] },
+      "sentiment_stats": { "positive": 30, "neutral": 5, "negative": 3 },
+      "service_breakdown": [
+        { "service_id": 17, "review_count": 10, "avg_rating": 4.5 },
+        { "service_id": 18, "review_count": 8, "avg_rating": 4.2 }
+      ],
+      "source_review_count": 38,
+      "source_avg_rating": 4.4,
+      "latest_review_cre_time": "2026-08-01T09:00:00Z",
+      "ai_model": "claude-3-5-sonnet",
+      "generate_status": "00=待生成 01=生成中 02=已完成 03=失敗",
+      "error_message": null
+    }
+    ```
+    `service_breakdown` 是橫跨該商家名下所有服務項目的評價數/平均分快取
+    陣列；其餘欄位語意同服務項目版本，`generate_time` 由 api_server 端
+    自動填入。
+
+    **輸出**：寫入後的完整摘要物件（`VendorReviewSummaryOut`，含計算欄位
+    `is_stale`）。該 `service_vendor_id` 尚無摘要記錄時回 201，已有記錄
+    時回 200（整包覆蓋）。
+
+    **說明**
+
+    給上層 AI 摘要生成流程呼叫 Bedrock 等模型彙整該商家名下所有服務的
+    評價後，把結果寫回 `mms_review_summary_vendor`（僅供商家後台使用，
+    橫跨其名下所有服務彙整）。此端點**不呼叫 LLM**，純粹轉發到 api_server
+    對應端點，覆寫式快取設計（同一 `service_vendor_id` 只保留最新 1 筆）。
+    """
+    resp = await db_api.put(f"/vendors/{service_vendor_id}/review-summary", json=payload)
+    return resp.json()
+
+
 @router.get("/vendors/{service_vendor_id}/orders")
 async def list_orders(
     service_vendor_id: int,

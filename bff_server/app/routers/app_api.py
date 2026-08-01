@@ -550,6 +550,47 @@ async def get_service_reviews(
     return reviews
 
 
+@router.get("/services/{service_id}/review-summary")
+async def get_service_review_summary(
+    service_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得服務項目的評價 AI 摘要
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+
+    **輸出**（`ServiceReviewSummaryOut`）
+    ```json
+    {
+      "service_id": 17,
+      "service_vendor_id": 1,
+      "summary_content": "整體評價正向，顧客普遍稱讚服務態度與準時性...",
+      "summary_highlights": { "pros": ["態度好", "準時"], "cons": ["價格偏高"] },
+      "sentiment_stats": { "positive": 12, "neutral": 3, "negative": 2 },
+      "source_review_count": 17,
+      "source_avg_rating": 4.5,
+      "latest_review_cre_time": "2026-08-01T09:00:00Z",
+      "ai_model": "claude-3-5-sonnet",
+      "generate_status": "00=待生成 01=生成中 02=已完成 03=失敗",
+      "generate_time": "...",
+      "error_message": null,
+      "is_stale": false
+    }
+    ```
+    `is_stale` 是計算欄位：即時比對 `mms_order_review` 目前的最新聚合值，
+    `true` 代表有新評價尚未納入這份摘要（可據此判斷是否要觸發重新生成）。
+
+    **說明**
+
+    給 APP 端顯示服務項目詳情頁的「評價摘要」區塊用（使用者與供應商
+    共用同一份內容）。直接轉發 api_server 現成端點，未做額外處理。
+    尚未生成過摘要時回 404。
+    """
+    resp = await db_api.get(f"/services/{service_id}/review-summary")
+    return resp.json()
+
+
 @router.get("/users/{inbr_account_id}")
 async def get_member_profile(
     inbr_account_id: str,

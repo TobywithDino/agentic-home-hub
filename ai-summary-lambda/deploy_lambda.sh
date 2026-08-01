@@ -13,24 +13,34 @@
 
 set -euo pipefail
 
-# ── 設定區 ─────────────────────────────────────────────────────────────────────
-AWS_PROFILE="agentic-home-hub"
-AWS_REGION="us-west-2"
-FUNCTION_NAME="aiwave-review-summary"
+# ── 載入設定 ───────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/.deploy.env"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "找不到 $CONFIG_FILE"
+  echo "請先執行： cp ai-summary-lambda/.deploy.env.example ai-summary-lambda/.deploy.env 並填入實際值"
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+
+: "${AWS_PROFILE:?.deploy.env 缺少 AWS_PROFILE}"
+: "${AWS_REGION:?.deploy.env 缺少 AWS_REGION}"
+: "${S3_BUCKET:?.deploy.env 缺少 S3_BUCKET}"
+: "${BFF_BASE_URL:?.deploy.env 缺少 BFF_BASE_URL}"
+: "${BEDROCK_MODEL_ID:?.deploy.env 缺少 BEDROCK_MODEL_ID}"
+
+FUNCTION_NAME="${FUNCTION_NAME:-aiwave-review-summary}"
 RUNTIME="python3.12"
 HANDLER="handler.lambda_handler"
-TIMEOUT=300          # 最大執行時間（秒），全平台掃一遍可能需要幾分鐘
-MEMORY=256           # MB
-S3_BUCKET="aiwave-deploy-728259505479-uswest2"   # 和 bff_server 共用同一個 bucket
+TIMEOUT="${TIMEOUT:-300}"
+MEMORY="${MEMORY:-256}"
+BEDROCK_REGION="${BEDROCK_REGION:-$AWS_REGION}"
+MAX_TOKENS="${MAX_TOKENS:-2048}"
 S3_KEY="lambda/${FUNCTION_NAME}.zip"
 
-# Lambda 環境變數（和 EC2 同一個 BFF）
-BFF_BASE_URL="http://52.10.163.115:8100"
-BEDROCK_MODEL_ID="anthropic.claude-sonnet-4-5-20250929-v1:0"
-BEDROCK_REGION="us-west-2"
-MAX_TOKENS="2048"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${SCRIPT_DIR}/.build"
 ZIP_PATH="${SCRIPT_DIR}/lambda_package.zip"
 

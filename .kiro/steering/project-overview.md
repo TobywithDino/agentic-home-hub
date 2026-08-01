@@ -191,7 +191,7 @@ agentcore logs               # 看 runtime 日誌
   - `mms_review_summary_service`：PK為`service_id`（與`cms_homepage_service.id`共用值），彙整單一服務項目底下所有`mms_order_review`的AI摘要，面向使用者與供應商共用同一份內容。
   - `mms_review_summary_vendor`：PK為`service_vendor_id`，彙整供應商名下所有服務的評價，多一個`service_breakdown`欄位（JSON陣列快取各服務的評價數/平均分），僅供供應商後台使用。
   - 兩張表都有`generate_status`（`00`待生成/`01`生成中/`02`已完成/`03`失敗）與`latest_review_cre_time`欄位，用於支援非同步生成流程與判斷摘要是否過期需重新生成。
-  - `api_server/app/routers/summaries.py` 已實作對應端點（`GET`/`PUT`/`PATCH .../status`/`DELETE`，服務項目與供應商各一組，供應商多一支清單端點），**只負責讀寫這兩張表，不呼叫LLM**，實際生成AI摘要內容的流程（呼叫Bedrock等模型）由上層服務負責再把結果`PUT`回來。`GET`回應含計算欄位`is_stale`（即時比對`mms_order_review`最新聚合值判斷摘要是否過期）。`bff_server`尚未有對應轉發端點。詳細規格見`Database/API_Reference.md`「I2. 評價AI摘要」章節。
+  - `api_server/app/routers/summaries.py` 已實作對應端點（`GET`/`PUT`/`PATCH .../status`/`DELETE`，服務項目與供應商各一組，供應商多一支清單端點），**只負責讀寫這兩張表，不呼叫LLM**，實際生成AI摘要內容的流程（呼叫Bedrock等模型）由上層服務負責再把結果`PUT`回來。`GET`回應含計算欄位`is_stale`（即時比對`mms_order_review`最新聚合值判斷摘要是否過期）。`bff_server`的`merchant_api.py`目前有`PUT /services/{id}/review-summary`與`PUT /vendors/{id}/review-summary`兩支寫回摘要的轉發端點（純轉發，同樣不呼叫LLM，給AI摘要生成流程寫回結果用），其餘`GET`/`PATCH .../status`/`DELETE`/清單端點`bff_server`尚未包裝。詳細規格見`Database/API_Reference.md`「I2. 評價AI摘要」章節。
 
 完整規格見 `Database/API_Reference.md` 和 `Database/database/*.sql` 的欄位註解（COMMENT ON COLUMN）。整體18張表的關係圖與逐欄位種子資料覆蓋狀況見 `Database/database/README.md`。
 

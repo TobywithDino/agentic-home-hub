@@ -21,11 +21,14 @@
 
 ```
 ai-summary-lambda/
-  handler.py          Lambda 入口，串接 BFF + Bedrock + log
-  prompts.py          消費者版 / 商家版 prompt template
-  requirements.txt    Python 依賴（httpx、boto3）
-  deploy_lambda.sh    打包 + 部署腳本
-  README.md           本文件
+  handler.py              Lambda 入口，串接 BFF + Bedrock + log
+  prompts.py              消費者版 / 商家版 prompt template
+  requirements.txt        Python 依賴（httpx、boto3）
+  deploy_lambda.sh        打包 + 部署腳本（從 .deploy.env 讀設定）
+  .deploy.env.example     部署設定範本（進版控）
+  .deploy.env             部署設定實際值（不進版控，自行複製填寫）
+  .gitignore              排除 .deploy.env、deploy_lambda.sh 等敏感/本機檔案
+  README.md               本文件
 ```
 
 ---
@@ -306,9 +309,9 @@ AWS Console → CloudWatch → Log groups → /aws/lambda/aiwave-review-summary
 
 ### Lambda 執行設定
 
-在 `deploy_lambda.sh` 設定區修改，需重新部署才生效。
+在 `.deploy.env` 修改，需重新部署才生效。
 
-| 參數 | 目前值 | 說明 |
+| 參數 | 預設值 | 說明 |
 |---|---|---|
 | `TIMEOUT` | `300` 秒 | 全平台掃一遍約需 1~3 分鐘 |
 | `MEMORY` | `256` MB | HTTP 呼叫 + 字串處理，256 MB 足夠 |
@@ -322,6 +325,14 @@ AWS Console → CloudWatch → Log groups → /aws/lambda/aiwave-review-summary
 ```bash
 aws configure --profile agentic-home-hub
 # 輸入 AWS 臨時憑證（向保管人索取）
+```
+
+複製並填寫部署設定：
+
+```bash
+cd ai-summary-lambda
+cp .deploy.env.example .deploy.env
+# 編輯 .deploy.env，填入 S3_BUCKET、BFF_BASE_URL 等實際值
 ```
 
 ### 第一次部署（已完成，供參考）
