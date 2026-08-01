@@ -257,7 +257,8 @@ async def get_service_labels(
     **輸入**
     - `service_id` (path, int): 服務項目 ID
 
-    **輸出**：全部標籤清單，並標示此 service 目前是否已勾選
+    **輸出**：此服務類型的可選標籤清單（該類型專屬 + 通用標籤），
+    並標示此 service 目前是否已勾選
     ```json
     [
       { "id": 1, "name": "寵物友善", "checked": true },
@@ -267,12 +268,25 @@ async def get_service_labels(
 
     **說明**
 
-    給商家後台「編輯服務項目」頁面用：一次拿到所有可選標籤，
-    並直接標示哪些是此 service 已經有的，前端可以直接渲染成
-    已勾選/未勾選的 checkbox，不用自己再做比對。
+    給商家後台「編輯服務項目」頁面用。流程：
+    1. 先查此 `service_id` 對應的 `cms_homepage_service.type`（服務類型）
+    2. 取得可選標籤範圍：`label.service_type` 等於該類型的專屬標籤，
+       加上 `label.service_type` 為 `null` 的通用標籤（不會列出其他
+       服務類型專屬、跟此服務無關的標籤）
+    3. 對照此 service 現有的 `service_label` 關聯，標示 `checked`
+
+    前端可以直接渲染成已勾選/未勾選的 checkbox，不用自己再做比對，
+    也不會出現跟此服務類型無關的標籤選項。
     """
+    service_resp = await db_api.get(f"/services/{service_id}")
+    service_type = service_resp.json()["type"]
+
     labels_resp = await db_api.get("/labels", params={"limit": 200})
     all_labels = labels_resp.json()["items"]
+    applicable_labels = [
+        label for label in all_labels
+        if label["service_type"] == service_type or label["service_type"] is None
+    ]
 
     service_labels_resp = await db_api.get(
         f"/services/{service_id}/labels", params={"limit": 200}
@@ -281,7 +295,7 @@ async def get_service_labels(
 
     return [
         {"id": label["id"], "name": label["name"], "checked": label["id"] in checked_label_ids}
-        for label in all_labels
+        for label in applicable_labels
     ]
 
 

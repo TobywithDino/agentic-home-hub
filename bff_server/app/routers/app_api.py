@@ -94,13 +94,13 @@ async def list_labels_by_service_type(
     service_type: str | None = None,
     db_api: DbApiClient = Depends(get_db_api_client),
 ):
-    """取得標籤清單（依服務類型精確篩選）
+    """取得標籤清單（該服務類型專屬標籤 + 通用標籤）
 
     **輸入**
     - `service_type` (query, string, 可選): 服務類型代碼。
       1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物
-      - **有帶值**：只回傳 `label.service_type` 等於此值的專屬標籤
-      - **不帶（省略或空字串）**：只回傳 `label.service_type` 為 `null` 的通用標籤
+      - **有帶值**：回傳該類型專屬標籤 + 通用標籤
+      - **不帶（省略或空字串）**：只回傳通用標籤
 
     **輸出**：標籤陣列（依 `sort` 排序）
     ```json
@@ -116,23 +116,22 @@ async def list_labels_by_service_type(
     服務類型，例如「寵物友善」、「24小時營業」），有值則是該服務類型
     專屬標籤（例如「中餐廳」、「泰式料理」只屬於餐廳訂位類型 `6`）。
 
-    使用者選好服務類型後，前端呼叫此端點（帶 `service_type`）取得該類型
-    專屬的標籤渲染成篩選選項；不帶 `service_type` 則取得通用標籤。
-    使用者勾選後把 label id 用逗號串起來傳給
+    通用標籤（`service_type` 為 `null`）**不論參數為何一定會回傳**；
+    有帶 `service_type` 時，額外加上該類型的專屬標籤。使用者選好服務
+    類型後，前端呼叫此端點取得可用標籤渲染成篩選選項，勾選後把 label id
+    用逗號串起來傳給
     `GET /app-api/service-types/{service_type}/vendors?labels=3,5` 做篩選。
 
-    這裡採精確篩選（`==` 而非 OR 通用標籤），跟 api_server 現成的
-    `GET /labels?service_type=...`（回傳「專屬 OR 通用」）語意不同，
-    因此改為呼叫 `GET /labels`（不帶篩選，取全部）後在此層精確過濾。
+    這裡呼叫 `GET /labels`（不帶篩選，取全部）後在此層過濾，
     標籤資料量小（demo 種子資料僅 8 筆），全撈回來過濾成本可忽略。
     """
     resp = await db_api.get("/labels", params={"limit": 200})
     all_labels = resp.json()["items"]
 
-    if service_type:
-        matched = [label for label in all_labels if label["service_type"] == service_type]
-    else:
-        matched = [label for label in all_labels if label["service_type"] is None]
+    matched = [
+        label for label in all_labels
+        if label["service_type"] is None or label["service_type"] == service_type
+    ]
 
     return [{"id": label["id"], "name": label["name"]} for label in matched]
 
