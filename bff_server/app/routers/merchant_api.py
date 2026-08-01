@@ -849,14 +849,9 @@ async def get_vendor_review_summary(
     {
       "service_vendor_id": 1,
       "summary_content": "分析期間：2026/07/25 – 2026/08/01",
+      "vendor_name": "潔淨家居清潔有限公司",
       "summary_highlights": {
-        "vendor_name": "潔淨家居清潔有限公司",
-        "summary_points": [
-          "本週共收到 4 筆客戶評價，平均評分 4.0 分。",
-          "情緒分佈：正面 3 筆、中立 1 筆、負面 0 筆。",
-          "各面向平均：服務態度 4.0、整潔程度 4.0、準時程度 4.3。",
-          "其中 3 筆附有文字評論，可作為服務改善的具體參考。"
-        ],
+        "summary": "本週服務整體口碑穩健，顧客普遍對準時性與專業度給予肯定。",
         "suggestions": [
           "「服務態度」平均最低，建議優先改善此環節。",
           "1 筆中立評價最易透過細節優化轉為正面。",
@@ -881,10 +876,10 @@ async def get_vendor_review_summary(
 
     欄位說明：
     - `summary_content`：分析期間字串，格式 `分析期間：YYYY/MM/DD – YYYY/MM/DD`
-    - `summary_highlights.vendor_name`：商家名稱
-    - `summary_highlights.summary_points`：本週住戶需求 AI 摘要，固定 4 點，每點 ≤20 字
-    - `summary_highlights.suggestions`：廠商營運與服務優化建議，3~4 點，每點 ≤20 字
-    - `sentiment_stats`：客戶情緒統計（`positive`=overall_rating 4~5、`neutral`=3、`negative`=1~2）
+    - `vendor_name`：商家名稱（頂層欄位，平行於 `summary_content`）
+    - `summary_highlights.summary`：本週住戶需求 AI 摘要，一段字串，≤50 字
+    - `summary_highlights.suggestions`：廠商營運與服務優化建議，3~4 點陣列，每點 ≤20 字
+    - `sentiment_stats`：近一週評價情緒統計（`positive`=overall_rating 4~5、`neutral`=3、`negative`=1~2）
     - `service_breakdown`：各服務項目評價數/平均分快取（全部評價計算，非僅近一週）
     - `source_review_count`：全部評價總數（供 `is_stale` 比對用）
     - `is_stale`：計算欄位，`true` 代表有新評價尚未納入本份摘要，建議重新觸發生成
@@ -892,7 +887,7 @@ async def get_vendor_review_summary(
     **說明**
 
     給商家後台「AI 智慧洞察」頁面用。Lambda 每週定時（或手動觸發）只取
-    **近 7 天**評價送給 LLM 產生 `summary_points` 與 `suggestions`，
+    **近 7 天**評價送給 LLM 產生 `summary` 與 `suggestions`，
     `sentiment_stats` 也是近 7 天統計；`service_breakdown` 和
     `source_review_count`/`source_avg_rating` 則涵蓋全部歷史評價（供
     `is_stale` 判斷與整體趨勢參考）。尚未生成過摘要時回 404。
@@ -915,14 +910,9 @@ async def upsert_vendor_review_summary(
     ```json
     {
       "summary_content": "分析期間：2026/07/25 – 2026/08/01",
+      "vendor_name": "潔淨家居清潔有限公司",
       "summary_highlights": {
-        "vendor_name": "潔淨家居清潔有限公司",
-        "summary_points": [
-          "本週共收到 4 筆客戶評價，平均評分 4.0 分。",
-          "情緒分佈：正面 3 筆、中立 1 筆、負面 0 筆。",
-          "各面向平均：服務態度 4.0、整潔程度 4.0、準時程度 4.3。",
-          "其中 3 筆附有文字評論，可作為服務改善的具體參考。"
-        ],
+        "summary": "本週服務整體口碑穩健，顧客普遍對準時性與專業度給予肯定。",
         "suggestions": [
           "「服務態度」平均最低，建議優先改善此環節。",
           "1 筆中立評價最易透過細節優化轉為正面。",
@@ -945,7 +935,9 @@ async def upsert_vendor_review_summary(
 
     欄位說明：
     - `summary_content`：分析期間字串，由 Lambda 填入 `分析期間：YYYY/MM/DD – YYYY/MM/DD`
-    - `summary_highlights`：包含 `vendor_name`（商家名稱）、`summary_points`（AI 摘要 4 點）與 `suggestions`（優化建議 3~4 點），由 Lambda 呼叫 Bedrock 生成
+    - `vendor_name`：商家名稱（頂層欄位，平行於 `summary_content`）
+    - `summary_highlights.summary`：本週住戶需求 AI 摘要，一段字串，≤50 字，由 Lambda 呼叫 Bedrock 生成
+    - `summary_highlights.suggestions`：廠商營運與服務優化建議，3~4 點陣列，每點 ≤20 字
     - `sentiment_stats`：近一週評價的情緒統計，`positive`/`neutral`/`negative` 各為筆數
     - `service_breakdown`：各服務項目全部評價的數量與平均分快取
     - `source_review_count`/`source_avg_rating`：全部歷史評價的總數與平均分（供 `is_stale` 比對）

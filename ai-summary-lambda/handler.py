@@ -4,16 +4,29 @@ AI Review Summary Lambda Handler
 
 Lambda 入口。支援兩種觸發方式：
   1. EventBridge Scheduler（每週定時）：event 為空 dict 或帶 source="aws.scheduler"
-  2. API Gateway HTTP 手動觸發（demo 用）：event 帶 queryStringParameters
+  2. CLI invoke / Console Test（手動/demo 用）：event 頂層直接帶參數
 
 event 參數（皆為可選，不傳就跑全部）：
   - mode       : "consumer" | "merchant" | "all"（預設 "all"）
   - service_id : 只跑單一服務項目的消費者摘要（mode="consumer" 時有效）
   - vendor_id  : 只跑單一商家的商家摘要（mode="merchant" 時有效）
 
+兩種摘要視角：
+  consumer（寫入 mms_review_summary_service）
+    - 針對每個服務項目，分析全部評價，輸出純文字口碑摘要
+    - 寫回：PUT /merchant-api/services/{id}/review-summary
+
+  merchant（寫入 mms_review_summary_vendor）
+    - 針對每個商家，只分析近 7 天評價，輸出結構化 JSON：
+        summary_content:  分析期間字串
+        vendor_name:      商家名稱（頂層欄位）
+        summary_highlights: { summary（≤50字字串）, suggestions（3~4點陣列） }
+        sentiment_stats:  { positive, neutral, negative }
+    - 寫回：PUT /merchant-api/vendors/{id}/review-summary
+
 回傳 / log：
   - Lambda CloudWatch Logs 會印出每次 Bedrock 的完整回覆
-  - HTTP 觸發時額外把摘要結果回傳在 response body（方便 demo）
+  - CLI invoke 觸發時 response body 包含完整摘要結果（方便 demo）
 """
 
 import json
@@ -154,6 +167,14 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
     商家視角：針對每個商家產生跨服務項目的綜合摘要。
     只使用近一週（7天）內的評價。
     若 only_vendor_id 有值，只跑該商家。
+
+    流程：
+    1. 拉商家清單（含名稱）
+    2. 拉全平台服務名稱對照表（供 prompt 顯示服務名稱而非 ID）
+    3. 拉該商家全部評價，篩選近 7 天
+    4. 呼叫 Bedrock 產生 JSON（summary / suggestions / sentiment_stats）
+    5. 計算聚合值（全部評價，供 is_stale 使用）
+    6. 寫回 DB
     """
     summaries = []
 
@@ -178,6 +199,12 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
 
         all_reviews = _fetch_merchant_reviews(vendor_id)
 
+        # 拉取此商家的服務名稱對照表（用於 prompt 顯示服務名稱而非 ID）
+        _, _svc_names, _ = _fetch_all_services()
+        # 只保留屬於此商家的服務名稱（_fetch_all_services 拉全平台，過濾一下）
+        vendor_service_ids = {r.get("service_id") for r in all_reviews if r.get("service_id")}
+        service_names_for_prompt = {sid: _svc_names.get(sid, f"服務{sid}") for sid in vendor_service_ids}
+
         # 篩選近一週的評價
         recent_reviews = _filter_reviews_by_date(all_reviews, week_ago_iso)
         logger.info(
@@ -186,7 +213,7 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
         )
 
         # 近一週無評價時仍呼叫 LLM（讓 LLM 輸出「本週尚無新評價資料」的結構化回應）
-        prompt = build_merchant_prompt(vendor_name, recent_reviews, week_start, week_end)
+        prompt = build_merchant_prompt(vendor_name, recent_reviews, week_start, week_end, service_names_for_prompt)
         raw_output = _call_bedrock(prompt)
 
         logger.info(
@@ -200,7 +227,7 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
 
         # 解析 LLM 輸出的 JSON
         parsed = _parse_merchant_json(raw_output, vendor_id)
-        summary_points = parsed.get("summary_points", [])
+        summary = parsed.get("summary", "")
         suggestions = parsed.get("suggestions", [])
         sentiment_stats = parsed.get("sentiment_stats", {"positive": 0, "neutral": 0, "negative": 0})
 
@@ -213,7 +240,7 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
         _upsert_vendor_summary(
             vendor_id=vendor_id,
             vendor_name=vendor_name,
-            summary_points=summary_points,
+            summary=summary,
             suggestions=suggestions,
             sentiment_stats=sentiment_stats,
             week_start=week_start,
@@ -230,7 +257,7 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
             "vendor_id": vendor_id,
             "vendor_name": vendor_name,
             "recent_review_count": len(recent_reviews),
-            "summary_points": summary_points,
+            "summary": summary,
             "suggestions": suggestions,
             "sentiment_stats": sentiment_stats,
         })
@@ -439,11 +466,10 @@ def _parse_merchant_json(raw: str, vendor_id: int) -> dict:
     except Exception as e:
         logger.error("[merchant] vendor_id=%d failed to parse LLM JSON: %s\nraw=%s", vendor_id, e, raw[:200])
         return {
-            "summary_points": ["本週 AI 分析暫時無法產生。"],
+            "summary": "本週 AI 分析暫時無法產生。",
             "suggestions": ["請稍後重新觸發 AI 分析。"],
             "sentiment_stats": {"positive": 0, "neutral": 0, "negative": 0},
         }
-
 
 # ── 寫回 DB ───────────────────────────────────────────────────────────────────
 
@@ -478,7 +504,7 @@ def _upsert_service_summary(
 def _upsert_vendor_summary(
     vendor_id: int,
     vendor_name: str,
-    summary_points: list[str],
+    summary: str,
     suggestions: list[str],
     sentiment_stats: dict,
     week_start: str,
@@ -491,9 +517,11 @@ def _upsert_vendor_summary(
 ) -> None:
     """PUT /merchant-api/vendors/{vendor_id}/review-summary 寫回商家摘要。
 
-    summary_content: 分析期間字串（供前端顯示「分析期間：...」）
-    summary_highlights: { summary_points, suggestions }（UI 兩個文字區塊）
-    sentiment_stats: { positive, neutral, negative }（UI 情緒圓餅圖）
+    頂層欄位對應：
+    - summary_content:  分析期間字串（供前端顯示「分析期間：...」）
+    - vendor_name:      商家名稱（頂層欄位，平行於 summary_content）
+    - summary_highlights: { summary, suggestions }（UI 兩個文字區塊）
+    - sentiment_stats:  { positive, neutral, negative }（UI 情緒圓餅圖）
     """
     url = f"{BFF_BASE_URL}/merchant-api/vendors/{vendor_id}/review-summary"
 
@@ -502,9 +530,9 @@ def _upsert_vendor_summary(
 
     body = {
         "summary_content": summary_content,
+        "vendor_name": vendor_name,
         "summary_highlights": {
-            "vendor_name": vendor_name,
-            "summary_points": summary_points,
+            "summary": summary,
             "suggestions": suggestions,
         },
         "sentiment_stats": sentiment_stats,
