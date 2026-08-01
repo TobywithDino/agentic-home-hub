@@ -8,11 +8,11 @@ import 'package:ai_butler_app/domain/models/domain_models.dart';
 /// 服務類別圖示對照（附錄 A）。
 IconData categoryIcon(String type) {
   return switch (type) {
-    '01' => Icons.cleaning_services_outlined,
-    '02' => Icons.ac_unit_outlined,
-    '03' => Icons.local_shipping_outlined,
-    '06' => Icons.restaurant_outlined,
-    '09' => Icons.delivery_dining_outlined,
+    '1' || '01' => Icons.cleaning_services_outlined,
+    '2' || '02' => Icons.ac_unit_outlined,
+    '3' || '03' => Icons.local_shipping_outlined,
+    '6' || '06' => Icons.restaurant_outlined,
+    '9' || '09' => Icons.delivery_dining_outlined,
     '10' => Icons.plumbing_outlined,
     '11' => Icons.shopping_bag_outlined,
     _ => Icons.apps_outlined,

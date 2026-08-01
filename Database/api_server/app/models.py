@@ -94,6 +94,7 @@ class Label(Base):
     cre_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
     upd_id: Mapped[uuid_mod.UUID | None] = mapped_column(UUID, nullable=True)
     cre_id: Mapped[uuid_mod.UUID] = mapped_column(UUID)
+    service_type: Mapped[str | None] = mapped_column(String(2), nullable=True)
 
 
 class ServiceLabel(Base):

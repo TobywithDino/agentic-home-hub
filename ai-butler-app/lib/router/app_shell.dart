@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:ai_butler_app/design_system/app_motion.dart';
 import 'package:ai_butler_app/design_system/theme_extensions.dart';
 
 /// 底部導覽外框（Requirement 4.14-15、18.5-6）。
@@ -27,15 +26,7 @@ class AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      body: AnimatedSwitcher(
-        duration: AppMotion.resolve(context, AppMotion.tab),
-        switchInCurve: AppMotion.standard,
-        switchOutCurve: AppMotion.standard,
-        child: KeyedSubtree(
-          key: ValueKey<int>(navigationShell.currentIndex),
-          child: navigationShell,
-        ),
-      ),
+      body: navigationShell,
       bottomNavigationBar: NavigationBar(
         selectedIndex: navigationShell.currentIndex,
         onDestinationSelected: (index) => navigationShell.goBranch(

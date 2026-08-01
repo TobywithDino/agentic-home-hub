@@ -4,18 +4,23 @@
 
 -- DROP TABLE label;
 
-CREATE TABLE label ( id serial4 NOT NULL, "name" varchar(50) NOT NULL, sort int4 DEFAULT 0 NOT NULL, is_enable varchar(2) NOT NULL, is_deleted varchar(2) NOT NULL, upd_time timestamptz NOT NULL, cre_time timestamptz NOT NULL, upd_id uuid NULL, cre_id uuid NOT NULL, CONSTRAINT label_pkey PRIMARY KEY (id), CONSTRAINT label_name_key UNIQUE ("name"));
+CREATE TABLE label ( id serial4 NOT NULL, "name" varchar(50) NOT NULL, sort int4 DEFAULT 0 NOT NULL, is_enable varchar(2) NOT NULL, is_deleted varchar(2) NOT NULL, upd_time timestamptz NOT NULL, cre_time timestamptz NOT NULL, upd_id uuid NULL, cre_id uuid NOT NULL, service_type varchar(2) NULL, CONSTRAINT label_pkey PRIMARY KEY (id), CONSTRAINT label_name_type_key UNIQUE (service_type, "name"));
+-- 通用標籤(service_type IS NULL)的名稱唯一性：UNIQUE(service_type, name) 對多筆皆為NULL的
+-- service_type不會擋重複(PostgreSQL將NULL視為互不相等)，故另建partial unique index補強。
+CREATE UNIQUE INDEX label_name_universal_key ON public.label ("name") WHERE service_type IS NULL;
+CREATE INDEX idx_label_service_type ON public.label USING btree (service_type);
 COMMENT ON TABLE public.label IS '服務特徵標籤主檔';
 
 -- Column comments
 
 COMMENT ON COLUMN public.label.id IS '流水號';
-COMMENT ON COLUMN public.label."name" IS '標籤名稱(例如:寵物友善、24小時營業、專業認證)';
+COMMENT ON COLUMN public.label."name" IS '標籤名稱(例如:寵物友善、24小時營業、專業認證、中餐廳、泰式料理)';
 COMMENT ON COLUMN public.label.sort IS '排序';
 COMMENT ON COLUMN public.label.is_enable IS '是否啟用:0->禁用；1->啟用';
 COMMENT ON COLUMN public.label.is_deleted IS '刪除註記:0->未刪除；1->已刪除';
 COMMENT ON COLUMN public.label.upd_time IS '異動日期時間';
 COMMENT ON COLUMN public.label.cre_time IS '新增日期時間';
+COMMENT ON COLUMN public.label.service_type IS '所屬服務類型代碼(對應cms_homepage_service.type，可為NULL)。NULL代表通用標籤(適用所有服務類型，例如寵物友善/24小時營業)；有值代表該服務類型專屬標籤(例如type=6餐廳訂位專屬的中餐廳/泰式料理)，各service type自行維護自己的專屬標籤，不要求跨type共用。名稱唯一性範圍縮小為同一service_type內(通用標籤另以partial unique index保證全域唯一)。';
 
 
 -- public.service_label definition
