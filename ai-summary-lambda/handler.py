@@ -212,6 +212,7 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
         # 寫回 DB
         _upsert_vendor_summary(
             vendor_id=vendor_id,
+            vendor_name=vendor_name,
             summary_points=summary_points,
             suggestions=suggestions,
             sentiment_stats=sentiment_stats,
@@ -476,6 +477,7 @@ def _upsert_service_summary(
 
 def _upsert_vendor_summary(
     vendor_id: int,
+    vendor_name: str,
     summary_points: list[str],
     suggestions: list[str],
     sentiment_stats: dict,
