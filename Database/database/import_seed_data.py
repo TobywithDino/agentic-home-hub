@@ -43,6 +43,7 @@ DDL_FILES = [
     "account_and_label.sql",         # label, service_label, vendor_accounts, user_accounts（新增)
     "諮詢單相關table.sql",           # pms_form 系列
     "mms_order_record.sql",          # mms_order_record
+    "mms_order_review.sql",          # mms_order_review（訂單評價單，新增）
 ]
 
 # Step 2：主檔種子資料（依 README 建議順序 + 新增表插入正確位置）
@@ -56,6 +57,7 @@ SEED_FILES_STEP2 = [
 # Step 3：交易資料
 SEED_FILES_STEP3 = [
     "order_record範例資料.json",
+    "order_review範例資料.json",     # mms_order_review（訂單評價單種子資料，依賴訂單先存在）
 ]
 
 # bytea 欄位：JSON 範例資料以逐byte映射字串(latin-1)表示加密二進位內容

@@ -1,8 +1,8 @@
 # API Reference — DB Access API Server
 
-本文件是 `api_server/` 的完整 API 規格參考，記錄全部 78 個業務端點的路徑、方法、請求/回應型別，並標註每個端點對應圖面需求（`AI指示文件/DB_API_1.jpg`、`DB_API_2.jpg`）或設計來源。
+本文件是 `api_server/` 的完整 API 規格參考，記錄全部 85 個業務端點的路徑、方法、請求/回應型別，並標註每個端點對應圖面需求（`AI指示文件/DB_API_1.jpg`、`DB_API_2.jpg`）或設計來源。
 
-> **本文件已於 2026-07-31 對照實際程式碼（`api_server/app/routers/*.py` 的路由定義 + FastAPI 自動生成的 `/openapi.json`）逐條核對，路徑與方法 100% 一致，無遺漏或錯誤。**
+> **本文件已於 2026-08-01 對照實際程式碼（`api_server/app/routers/*.py` 的路由定義 + FastAPI 自動生成的 `/openapi.json`）逐條核對，路徑與方法 100% 一致，無遺漏或錯誤。**
 
 - 所有查詢類（GET 列表）端點皆支援 `limit`（預設 20，1~200）/ `offset`（預設 0）分頁查詢參數，回應包裝在 `PagedResponse` 中。
 - 所有刪除皆為軟刪除（更新 `is_deleted` 欄位），例外：`cms_homepage_service_vendor`、`cms_homepage_service`、`pms_form_group`、`pms_form_topic` 這 4 張表在 DDL 中沒有 `is_deleted` 欄位，其刪除為實體 DELETE（詳見各節註記）。
@@ -19,7 +19,8 @@
 - [F. 表單結構](#f-表單結構-pms_form-系列)
 - [G. 諮詢單回饋](#g-諮詢單回饋-pms_form_feedback)
 - [H. 訂單](#h-訂單-mms_order_record)
-- [I. 系統](#i-系統)
+- [I. 訂單評價](#i-訂單評價-mms_order_review)
+- [J. 系統](#j-系統)
 - [圖面功能覆蓋檢查](#圖面功能覆蓋檢查12項全部可實現)
 
 ---
@@ -540,7 +541,73 @@
 
 ---
 
-## I. 系統
+## I. 訂單評價（mms_order_review）
+
+新增功能，圖面未涵蓋。每筆訂單至多一筆評價：`mms_order_review.record_id` 直接沿用對應 `mms_order_record.record_id` 的值（1:0..1對應，本表無獨立序列），資料庫層面天然保證「一筆訂單最多一筆評價」，重複提交會因 PK 衝突被路由層轉為 409。詳細設計討論見 `部署手冊.md`。
+
+| # | Method / Path | 說明 | Request Body | 回傳型別 | 來源 |
+|---|---|---|---|---|---|
+| 79 | `POST /orders/{record_id}/review` | 提交訂單評價 | `ReviewCreate` | `ReviewOut`（201） | 新增功能 |
+| 80 | `GET /orders/{record_id}/review` | 查看單筆訂單的評價（404代表尚未評價） | - | `ReviewOut` | 新增功能 |
+| 81 | `PATCH /users/{inbr_account_id}/orders/{record_id}/review` | 評價者本人修改評價內容 | `ReviewUpdate` | `ReviewOut` | 新增功能 |
+| 82 | `GET /users/{inbr_account_id}/reviews` | 會員查看自己送出過的所有評價(分頁) | - | `PagedResponse<ReviewOut>` | 新增功能 |
+| 83 | `GET /vendors/{service_vendor_id}/reviews` | 供應商查看自己收到的所有評價(分頁,可用`service_id` query參數篩選) | - | `PagedResponse<ReviewOut>` | 新增功能 |
+| 84 | `GET /vendors/{service_vendor_id}/rating-summary` | 評分聚合：評價數與平均分(可用`service_id` query參數細分) | - | `RatingSummaryOut` | 新增功能 |
+| 85 | `GET /services/{service_id}/reviews` | **公開評價牆，無需身分驗證即可呼叫**，給潛在顧客看該服務項目的評價 | - | `PagedResponse<PublicReviewOut>` | 新增功能 |
+
+**業務規則**：
+
+- `POST /orders/{record_id}/review`：要求該訂單 `order_status='80'`（已完成），否則回409；`payload.inbr_account_id` 須與訂單的 `inbr_account_id` 一致，否則回403（此比對方式依現有架構的信任模型，因整個API目前無身分驗證中介層，非本功能新增的安全坑）；成功後同步將對應訂單的 `comment_status` 更新為 `'02'`（已評價）。
+- `PATCH /users/{inbr_account_id}/orders/{record_id}/review`：路徑中的 `inbr_account_id` 須與該筆評價的 `inbr_account_id` 一致，否則回403。
+- `GET /services/{service_id}/reviews`：是全部端點中**唯一不需身分驗證即可呼叫**的端點，語意上開放給未登入的訪客/潛在顧客瀏覽。回傳的 `PublicReviewOut` 刻意排除 `inbr_account_id`/`order_no`/`service_vendor_id`/`status`/`is_deleted` 等身分或內部狀態欄位。
+
+**`ReviewCreate`**：`inbr_account_id: uuid`（必填）、`overall_rating: int`（必填,1~5,超出範圍回422）、`rating_detail: json?`、`review_content: str?`、`media: json?`（皆可選）
+
+**`ReviewUpdate`**：`overall_rating`/`rating_detail`/`review_content`/`media` 皆可選,只更新有提供的欄位（`overall_rating`若提供仍受1~5範圍驗證）
+
+**`ReviewOut`**
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `record_id` | `int` | 對應訂單ID（PK，與`mms_order_record.record_id`共用值，非自增） |
+| `order_no` | `str` | 訂單編號（冗餘自mms_order_record） |
+| `service_vendor_id` / `service_id` | `int` / `int` | 服務提供商/服務ID（冗餘欄位） |
+| `inbr_account_id` | `uuid` | 提交評價的會員編號 |
+| `overall_rating` | `int` | 整體評分，1~5星 |
+| `rating_detail` | `json?` | 多維度評分，例如`{"attitude":5,"cleanliness":5}` |
+| `review_content` | `str?` | 文字評價內容 |
+| `media` | `json?` | 附加照片/影片網址，JSON陣列格式 |
+| `status` | `str` | 評價狀態，`01`已送出（建立時預設值） |
+| `is_deleted` | `bool` | 是否刪除 |
+| `cre_id` | `uuid` | 新增者編號（通常等於`inbr_account_id`） |
+| `cre_time` / `upd_time` | `datetime` / `datetime` | 新增/異動時間 |
+| `upd_id` | `uuid?` | 異動者編號 |
+
+**`PublicReviewOut`**（`GET /services/{service_id}/reviews` 專用，公開評價牆縮減欄位版本）
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `record_id` | `int` | 對應訂單ID |
+| `overall_rating` | `int` | 整體評分 |
+| `rating_detail` | `json?` | 多維度評分 |
+| `review_content` | `str?` | 文字評價內容 |
+| `media` | `json?` | 附加照片/影片網址 |
+| `cre_time` | `datetime` | 評價時間 |
+
+> 註：不含 `inbr_account_id`/`order_no`/`service_vendor_id`/`service_id`/`status`/`is_deleted`，刻意排除評價者身分與訂單/內部狀態資訊。
+
+**`RatingSummaryOut`**
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `service_vendor_id` | `int` | 服務提供商ID |
+| `service_id` | `int?` | 服務ID（未帶`service_id` query參數時為`null`，代表統計該廠商全部服務） |
+| `review_count` | `int` | 符合條件的評價總數（`is_deleted=false`） |
+| `average_rating` | `float?` | 平均評分，四捨五入至小數點後2位；無任何評價時為`null` |
+
+---
+
+## J. 系統
 
 | # | Method / Path | 說明 | 回傳型別 |
 |---|---|---|---|
@@ -567,6 +634,7 @@
 | 圖2 | 設定商家資訊 | #14（商家屬性）+ #39（聯絡方式） |
 | 圖2 | 登入 | #36 |
 | - | 獲取廠商表單內容（新增功能，圖面未涵蓋） | #78 |
+| - | 訂單評價（新增功能，圖面未涵蓋） | #79~#85 |
 
 ---
 
@@ -588,3 +656,4 @@
 
 - **2026-07-31**：由 `DB_API_table.md` 重新命名為 `API_Reference.md`，並對照實際 `api_server` 程式碼與 `/openapi.json` 逐條核對（77個端點路徑/方法100%一致），新增所有端點的 Request Body / 回傳型別完整說明。
 - **2026-07-31**：新增 `GET /vendors/{service_vendor_id}/forms/full`（#78，見 `forms.py`），補上圖面未涵蓋的「獲取廠商表單內容」功能：輸入 service_vendor_id，回傳該廠商所有已審核且啟用表單的完整結構，避免前端需自行迴圈呼叫 #41+#43。
+- **2026-08-01**：新增第 I 章「訂單評價」（`mms_order_review`，#79~#85，見 `routers/reviews.py`），支援「每筆訂單使用者可提交一份評價」的需求。新增評價會同步更新對應訂單的 `comment_status`。新增 `GET /services/{service_id}/reviews`（#85）作為公開評價牆，是全部端點中唯一不需身分驗證即可呼叫的端點，回傳縮減欄位的 `PublicReviewOut`。原第I章「系統」順延為第J章。端點總數由78增至85，已對照實際 `/openapi.json` 核對一致。
