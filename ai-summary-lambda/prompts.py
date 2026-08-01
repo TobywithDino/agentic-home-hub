@@ -45,7 +45,7 @@ def build_merchant_prompt(vendor_name: str, reviews: list[dict], week_start: str
     """
     給商家看的 AI 智慧洞察 prompt。
     輸出結構化 JSON，對應 UI 三個區塊：
-    - summary:        本週住戶需求 AI 摘要（字串，≤100 字）
+    - summary:        本週住戶需求 AI 摘要（字串，≤125 字）
     - suggestions:    廠商營運與服務優化建議（3~4 點陣列，每點 ≤20 字）
     - sentiment_stats: 客戶情緒統計（positive / neutral / negative 筆數）
 
@@ -65,7 +65,7 @@ def build_merchant_prompt(vendor_name: str, reviews: list[dict], week_start: str
 
 輸出格式如下：
 {{
-  "summary": "根據本週所有文字評論做一段精簡但具體的摘要（至多 100 字）",
+  "summary": "根據本週所有文字評論做一段精簡但具體的摘要（至多 125 字）",
   "suggestions": [
     "「服務態度」平均最低，建議優先改善此環節。",
     "N 筆中立評價代表體驗尚可但未達期待，是最易透過細節優化轉為正面的區間。",
@@ -80,7 +80,7 @@ def build_merchant_prompt(vendor_name: str, reviews: list[dict], week_start: str
 }}
 
 規則：
-1. summary 輸出一段摘要，繁體中文，**至多 100 字**（含標點）
+1. summary 輸出一段摘要，繁體中文，**至多 125 字**（含標點）
 2. suggestions 3~4 點，每點繁體中文，**至多 20 字**（含標點），基於本週評價給出具體可執行的建議
 3. sentiment_stats 依 overall_rating 分類：4~5 分為正面、3 分為中立、1~2 分為負面
 4. 若本週無任何評價，summary 改為「本週尚無新評價資料。」，suggestions 給通用建議，sentiment_stats 全填 0"""
