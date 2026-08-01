@@ -13,10 +13,10 @@ agentic-home-hub/
 ├── Database/                隊友負責：資料庫 + DB Access API
 │   ├── 部署手冊.md            本機建置 + AWS 遷移完整手冊
 │   ├── AWS操作手冊.md         目前 AWS 環境連線/操作指南（EC2 IP、SSM 連線方式等）
-│   ├── API_Reference.md      api_server 85 個端點完整規格
+│   ├── API_Reference.md      api_server 94 個端點完整規格
 │   ├── database/             DDL（*.sql）+ 種子資料（*.json）+ 建置腳本
 │   └── api_server/           FastAPI，直接操作 PostgreSQL，跑在 EC2 8000 埠
-│       └── app/routers/      geo / catalog / accounts / forms / feedbacks / orders / reviews
+│       └── app/routers/      geo / catalog / accounts / forms / feedbacks / orders / reviews / summaries
 └── bff_server/               我方負責：BFF（Backend For Frontend）
     ├── README.md             架構說明 + 端點對應表
     ├── deploy.sh             一鍵部署到 EC2 的腳本
@@ -87,8 +87,13 @@ bash deploy.sh
 - **mms_order_review**：訂單評價，`record_id` 直接沿用對應 `mms_order_record.record_id`（1:0..1，無獨立序列），一筆訂單至多一筆評價由 PK 天然保證。新增評價會同步把訂單的 `comment_status` 改成 `02`。`GET /services/{service_id}/reviews` 是全平台唯一不需身分驗證即可呼叫的公開端點（評價牆）。bff_server 所有回傳訂單的端點（`view_orders`、`list_orders`、`create_order`、`update_order`）都會用 `review_utils.py` 把對應評價併入訂單物件的 `review` 欄位（沒評價過則為 `null`），前端不需要另外呼叫評價 API。使用者提交評價走 `app_api.py` 的 `POST /orders/{record_id}/review`，修改評價走 `PATCH /users/{inbr_account_id}/orders/{record_id}/review`（皆為轉發 api_server，業務規則如訂單須完成、身分比對、防重複皆由 api_server 驗證）。
 - **pms_form 系列**：諮詢表單結構（form → group → topic → option/media）。merchant_api.py 的 `POST /forms` 提供一次性建立表單+巢狀題組/題目/選項的組裝端點；`PATCH /forms/{id}` 提供差異比對式的完整表單更新（前端傳整包巢狀結構，帶 `id` 的項目視為更新、不帶 `id` 視為新增、現況有但 payload 沒帶到的視為刪除，依 選項→題目→題組 順序刪除、表單→題組→題目→選項 順序新增/更新）；兩者皆因 api_server 只有單筆 CRUD 端點、無跨資源交易機制，BFF 依序呼叫多支端點組裝，中途失敗不會自動回滾。`GET /vendors/{id}/forms`（清單，僅主檔）、`GET /forms/{id}/full`（單張表單完整巢狀內容，直接轉發 api_server 現成端點）
 - **pms_form_feedback**：使用者填寫表單後的回饋記錄
+- **mms_review_summary_service / mms_review_summary_vendor**：評價AI摘要表（`Database/database/mms_review_summary.sql`，新增功能，目前無種子資料）。皆為「覆寫式快取」設計，同一個key只保留最新1筆，重新生成時直接覆蓋，不留歷史版本：
+  - `mms_review_summary_service`：PK為`service_id`（與`cms_homepage_service.id`共用值），彙整單一服務項目底下所有`mms_order_review`的AI摘要，面向使用者與供應商共用同一份內容。
+  - `mms_review_summary_vendor`：PK為`service_vendor_id`，彙整供應商名下所有服務的評價，多一個`service_breakdown`欄位（JSON陣列快取各服務的評價數/平均分），僅供供應商後台使用。
+  - 兩張表都有`generate_status`（`00`待生成/`01`生成中/`02`已完成/`03`失敗）與`latest_review_cre_time`欄位，用於支援非同步生成流程與判斷摘要是否過期需重新生成。
+  - `api_server/app/routers/summaries.py` 已實作對應的9支端點（`GET`/`PUT`/`PATCH .../status`/`DELETE`，服務項目與供應商各一組，供應商多一支清單端點），**只負責讀寫這兩張表，不呼叫LLM**，實際生成AI摘要內容的流程（呼叫Bedrock等模型）由上層服務負責再把結果`PUT`回來。`GET`回應含計算欄位`is_stale`（即時比對`mms_order_review`最新聚合值判斷摘要是否過期）。`bff_server`尚未有對應轉發端點。詳細規格見`Database/API_Reference.md`「I2. 評價AI摘要」章節。
 
-完整規格見 `Database/API_Reference.md` 和 `Database/database/*.sql` 的欄位註解（COMMENT ON COLUMN）。整體16張表的關係圖與逐欄位種子資料覆蓋狀況見 `Database/database/README.md`。
+完整規格見 `Database/API_Reference.md` 和 `Database/database/*.sql` 的欄位註解（COMMENT ON COLUMN）。整體18張表的關係圖與逐欄位種子資料覆蓋狀況見 `Database/database/README.md`。
 
 ## bff_server 開發慣例
 

@@ -728,3 +728,92 @@ class RatingSummaryOut(BaseModel):
     service_id: int | None = None
     review_count: int
     average_rating: float | None
+
+
+# ---------------------------------------------------------------------------
+# I2. 評價AI摘要（新增功能）
+# ---------------------------------------------------------------------------
+class ReviewSummaryStatusUpdate(BaseModel):
+    """僅更新生成狀態用，讓生成流程可以「先標記生成中」再非同步寫入完整內容。
+    若目標 key 尚無記錄，路由層會自動建立一筆殼記錄（其餘欄位皆為 null）。"""
+    generate_status: str = Field(max_length=2)
+    error_message: str | None = None
+
+
+class ServiceReviewSummaryUpsert(BaseModel):
+    """完整覆寫語意：呼叫端（AI生成流程）應自行查詢當下最新的評價聚合值
+    （筆數/平均分/最新時間）連同生成結果一起送出。generate_time 由伺服器端填入。"""
+    service_vendor_id: int
+    summary_content: str | None = None
+    summary_highlights: JsonValue | None = None
+    sentiment_stats: JsonValue | None = None
+    source_review_count: int = 0
+    source_avg_rating: float | None = None
+    latest_review_cre_time: dt.datetime | None = None
+    ai_model: str | None = Field(default=None, max_length=50)
+    generate_status: str = Field(max_length=2)
+    error_message: str | None = None
+
+
+class ServiceReviewSummaryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    service_id: int
+    service_vendor_id: int
+    summary_content: str | None
+    summary_highlights: JsonValue | None
+    sentiment_stats: JsonValue | None
+    source_review_count: int
+    source_avg_rating: float | None
+    latest_review_cre_time: dt.datetime | None
+    ai_model: str | None
+    generate_status: str
+    generate_time: dt.datetime | None
+    error_message: str | None
+    is_deleted: bool
+    cre_id: uuid.UUID
+    cre_time: dt.datetime
+    upd_id: uuid.UUID | None
+    upd_time: dt.datetime
+    is_stale: bool = False
+    """計算欄位（非資料庫欄位）：即時比對 mms_order_review 目前的
+    COUNT(*)/MAX(cre_time) 是否超過本筆摘要記錄的 source_review_count/
+    latest_review_cre_time，True 代表有新評價尚未納入摘要，建議觸發重新生成。"""
+
+
+class VendorReviewSummaryUpsert(BaseModel):
+    """結構同 ServiceReviewSummaryUpsert，差異是無 service_vendor_id 冗餘欄位
+    （PK 本身即為 service_vendor_id），多一個 service_breakdown 統計快取。"""
+    summary_content: str | None = None
+    summary_highlights: JsonValue | None = None
+    sentiment_stats: JsonValue | None = None
+    service_breakdown: JsonValue | None = None
+    source_review_count: int = 0
+    source_avg_rating: float | None = None
+    latest_review_cre_time: dt.datetime | None = None
+    ai_model: str | None = Field(default=None, max_length=50)
+    generate_status: str = Field(max_length=2)
+    error_message: str | None = None
+
+
+class VendorReviewSummaryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    service_vendor_id: int
+    summary_content: str | None
+    summary_highlights: JsonValue | None
+    sentiment_stats: JsonValue | None
+    service_breakdown: JsonValue | None
+    source_review_count: int
+    source_avg_rating: float | None
+    latest_review_cre_time: dt.datetime | None
+    ai_model: str | None
+    generate_status: str
+    generate_time: dt.datetime | None
+    error_message: str | None
+    is_deleted: bool
+    cre_id: uuid.UUID
+    cre_time: dt.datetime
+    upd_id: uuid.UUID | None
+    upd_time: dt.datetime
+    is_stale: bool = False
+    """計算欄位（非資料庫欄位），語意同 ServiceReviewSummaryOut.is_stale，
+    但比對範圍是該供應商名下全部服務的 mms_order_review。"""

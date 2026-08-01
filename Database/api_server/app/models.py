@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-SQLAlchemy ORM models，映射 database/ 內既有 DDL 建立的 16 張資料表。
+SQLAlchemy ORM models，映射 database/ 內既有 DDL 建立的 18 張資料表。
 
 重要：這裡只做「映射」，不負責建表（不呼叫 Base.metadata.create_all）。
 表結構的唯一真實來源是 database/*.sql，任何欄位異動請先改 DDL 再回來同步這裡。
@@ -373,6 +373,59 @@ class MmsOrderReview(Base):
     review_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     media: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String(2), default="01")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    cre_id: Mapped[uuid_mod.UUID] = mapped_column(UUID)
+    cre_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
+    upd_id: Mapped[uuid_mod.UUID | None] = mapped_column(UUID, nullable=True)
+    upd_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
+
+
+# ---------------------------------------------------------------------------
+# I2. 評價AI摘要（新增功能）
+# ---------------------------------------------------------------------------
+class MmsReviewSummaryService(Base):
+    """服務項目評價AI摘要，覆寫式快取：同一個 service_id 只保留最新1筆，
+    重新生成時直接覆蓋既有資料，不留歷史版本。PK 為 service_id（與
+    cms_homepage_service.id 共用值，無獨立序列）。"""
+    __tablename__ = "mms_review_summary_service"
+
+    service_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    service_vendor_id: Mapped[int] = mapped_column(Integer)
+    summary_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_highlights: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    sentiment_stats: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    source_review_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_avg_rating: Mapped[float | None] = mapped_column(Numeric(3, 2), nullable=True)
+    latest_review_cre_time: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    ai_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    generate_status: Mapped[str] = mapped_column(String(2), default="00")
+    generate_time: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    cre_id: Mapped[uuid_mod.UUID] = mapped_column(UUID)
+    cre_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
+    upd_id: Mapped[uuid_mod.UUID | None] = mapped_column(UUID, nullable=True)
+    upd_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class MmsReviewSummaryVendor(Base):
+    """供應商整合評價AI摘要，覆寫式快取：同一個 service_vendor_id 只保留
+    最新1筆，橫跨其名下所有服務彙整。PK 為 service_vendor_id（與
+    cms_homepage_service_vendor.id 共用值，無獨立序列）。僅供供應商後台使用。"""
+    __tablename__ = "mms_review_summary_vendor"
+
+    service_vendor_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    summary_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_highlights: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    sentiment_stats: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    service_breakdown: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    source_review_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_avg_rating: Mapped[float | None] = mapped_column(Numeric(3, 2), nullable=True)
+    latest_review_cre_time: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    ai_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    generate_status: Mapped[str] = mapped_column(String(2), default="00")
+    generate_time: Mapped[object | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     cre_id: Mapped[uuid_mod.UUID] = mapped_column(UUID)
     cre_time: Mapped[object] = mapped_column(TIMESTAMP(timezone=True))
