@@ -157,7 +157,7 @@
 
 | # | Method / Path | 說明 | Request Body | 回傳型別 | 來源 |
 |---|---|---|---|---|---|
-| 22 | `GET /labels` | 列表(分頁) | - | `PagedResponse<LabelOut>` | 管理端CRUD |
+| 22 | `GET /labels` | 列表(分頁,可用`service_type` query參數篩選) | - | `PagedResponse<LabelOut>` | 管理端CRUD |
 | 23 | `GET /labels/{label_id}` | 單筆 | - | `LabelOut` | 慣例 |
 | 24 | `POST /labels` | 建立標籤 | `LabelCreate` | `LabelOut`（201） | 管理端CRUD |
 | 25 | `PATCH /labels/{label_id}` | 更新標籤 | `LabelUpdate` | `LabelOut` | 管理端CRUD |
@@ -178,10 +178,17 @@
 | `upd_time` / `cre_time` | `datetime` | 異動/新增時間 |
 | `upd_id` | `uuid?` | 異動者編號 |
 | `cre_id` | `uuid` | 新增者編號 |
+| `service_type` | `str?` | 所屬服務類型代碼（對應`cms_homepage_service.type`，新增功能）。`null`代表通用標籤（適用所有服務類型，例如「寵物友善」「24小時營業」）；有值代表該服務類型專屬標籤（例如`type=6`餐廳訂位專屬的「中餐廳」「泰式料理」）。各`service_type`各自維護自己的專屬標籤，不要求跨類型共用 |
 
-**`LabelCreate`**：`name: str`（必填）、`sort: int`（預設0）、`is_enable: str`（預設`"1"`）
+**`LabelCreate`**：`name: str`（必填）、`sort: int`（預設0）、`is_enable: str`（預設`"1"`）、`service_type: str?`（可選，不填即為通用標籤）
 
-**`LabelUpdate`**：`name`/`sort`/`is_enable` 皆可選
+**`LabelUpdate`**：`name`/`sort`/`is_enable`/`service_type` 皆可選
+
+**`GET /labels` 的 `service_type` query 參數說明**：不帶此參數回傳全部啟用中標籤（不分類型）；帶入時回傳「通用標籤（`service_type IS NULL`） + 該類型專屬標籤」的聯集，供商家後台編輯服務項目時只顯示跟該服務類型相關的標籤可勾選，不會看到其他類型的專屬標籤（例如編輯水電修繕服務時不會看到「中餐廳」）。
+
+**唯一性規則**：標籤名稱唯一性範圍是「同一個`service_type`內」（`UNIQUE(service_type, name)`），不同`service_type`可以有相同名稱的專屬標籤（例如`type=6`跟`type=9`都可以各自有「中餐廳」標籤）；通用標籤（`service_type IS NULL`）額外用 partial unique index 保證全域名稱唯一（PostgreSQL 的`UNIQUE`約束對多筆 NULL 值不視為衝突，故需此額外限制）。
+
+**`POST /labels`/`PATCH /labels/{label_id}` 的重複性檢查**：建立/更新前會依上述唯一性規則主動查詢是否已存在同名標籤（`service_type`有值時查同類型內、為`null`時查全域通用標籤），若衝突回 409（`detail`為「此服務類型下已存在同名標籤」或「標籤名稱已存在」），不會讓資料庫層的唯一約束例外直接外洩成 500。`PATCH`僅在 payload 有帶`name`或`service_type`時才觸發此檢查，且會排除自身這筆（改回原名稱不會誤判為衝突）。
 
 **`ServiceLabelOut`**
 
@@ -719,3 +726,5 @@
 - **2026-08-01**：新增第 I 章「訂單評價」（`mms_order_review`，#79~#85，見 `routers/reviews.py`），支援「每筆訂單使用者可提交一份評價」的需求。新增評價會同步更新對應訂單的 `comment_status`。新增 `GET /services/{service_id}/reviews`（#85）作為公開評價牆，是全部端點中唯一不需身分驗證即可呼叫的端點，回傳縮減欄位的 `PublicReviewOut`。原第I章「系統」順延為第J章。端點總數由78增至85，已對照實際 `/openapi.json` 核對一致。
 - **2026-08-01**：新增第 I2 章「評價AI摘要」（`mms_review_summary_service`/`mms_review_summary_vendor`，#86~#94，見 `routers/summaries.py`），支援使用者查看單一服務項目的評價AI摘要、供應商查看各服務摘要與整合總摘要的需求。本 server 只負責讀寫這兩張覆寫式快取表，不呼叫LLM。`PATCH .../status` 會在記錄不存在時自動建立殼記錄；`GET` 回應含即時計算欄位 `is_stale` 判斷摘要是否過期。端點總數由85增至94，已用本機 Docker PostgreSQL + uvicorn 實測全部9個端點行為正確。
 - **2026-08-01**：`cms_homepage_service` 新增 `form_id: int?` 欄位（`ServiceCreate`/`ServiceUpdate`/`ServiceOut`），解決「一個服務項目要對應到哪張諮詢表單」查詢缺口（原設計只能反向查`pms_form.service_vendor_id`，無法從單一`service_id`直接取得對應表單）。不影響既有端點路徑，端點數量不變（仍94個），已用本機 Docker PostgreSQL + uvicorn 實測 GET/POST/PATCH/DELETE 皆正確讀寫此欄位。種子資料同步更新：`service_vendor_id=1`名下4個服務項目（洗衣機清洗/冷氣清洗/專業清潔/計時家事服務）皆設為`form_id=9`（既有測試表單），示範多個服務項目共用同一張表單，其餘4個服務項目維持`NULL`。
+- **2026-08-01**：`label` 新增 `service_type: str?` 欄位（`LabelCreate`/`LabelUpdate`/`LabelOut`），支援「各服務類型自行維護專屬標籤」的需求（例如`type=6`餐廳訂位的「中餐廳」「泰式料理」）。名稱唯一性範圍由全域改為「同一`service_type`內」，通用標籤（`NULL`）另用 partial unique index 維持全域唯一。`GET /labels` 新增`service_type` query 參數，帶入時回傳「通用+該類型專屬」標籤聯集。端點數量不變（仍94個），已用本機 Docker PostgreSQL + uvicorn 實測唯一約束行為（同類型內重複名稱擋下、跨類型可同名、通用標籤全域唯一）與 CRUD 讀寫皆正確。種子資料新增2筆專屬標籤（中餐廳/泰式料理，`service_type="6"`）並示範關聯到既有的餐廳訂位服務項目。
+- **2026-08-01**：修復 `POST /labels`/`PATCH /labels/{label_id}` 遇到唯一約束衝突時回傳裸 500（`IntegrityError`未被攔截）的既有問題（非本次`service_type`欄位新增造成，是`create_label`/`update_label`原本就缺少`accounts.py`/`geo.py`/`catalog.py`其他`create_*`端點皆有的「先查重複再建立」慣例，這次新增分區唯一約束後才被實測發現）。改為主動查詢並回 409，`PATCH`會排除自身這筆避免誤判。已用本機 Docker PostgreSQL + uvicorn 實測9種情境（同類型重複/跨類型同名/通用標籤全域唯一/PATCH改名衝突/排除自己邏輯）皆正確，不影響既有端點路徑與數量。

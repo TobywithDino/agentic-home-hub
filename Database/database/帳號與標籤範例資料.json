@@ -1,237 +1,349 @@
 {
-"label": [
-	{
-		"id" : 1,
-		"name" : "寵物友善",
-		"sort" : 1,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : 2,
-		"name" : "24小時營業",
-		"sort" : 2,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : 3,
-		"name" : "專業認證",
-		"sort" : 3,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : 4,
-		"name" : "免費估價",
-		"sort" : 4,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : 5,
-		"name" : "到府服務",
-		"sort" : 5,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : 6,
-		"name" : "快速到達",
-		"sort" : 6,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	}
-]}
+	"label": [
+		{
+			"id": 1,
+			"name": "寵物友善",
+			"sort": 1,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862",
+			"service_type": null
+		},
+		{
+			"id": 2,
+			"name": "24小時營業",
+			"sort": 2,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862",
+			"service_type": null
+		},
+		{
+			"id": 3,
+			"name": "專業認證",
+			"sort": 3,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862",
+			"service_type": null
+		},
+		{
+			"id": 4,
+			"name": "免費估價",
+			"sort": 4,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862",
+			"service_type": null
+		},
+		{
+			"id": 5,
+			"name": "到府服務",
+			"sort": 5,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862",
+			"service_type": null
+		},
+		{
+			"id": 6,
+			"name": "快速到達",
+			"sort": 6,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862",
+			"service_type": null
+		},
+		{
+			"id": 7,
+			"name": "中餐廳",
+			"sort": 7,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-08-01T09:00:00.000Z",
+			"cre_time": "2026-08-01T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862",
+			"service_type": "6"
+		},
+		{
+			"id": 8,
+			"name": "泰式料理",
+			"sort": 8,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-08-01T09:00:00.000Z",
+			"cre_time": "2026-08-01T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862",
+			"service_type": "6"
+		}
+	]
+}
 
 
 {
-"service_label": [
-	{ "service_id" : 4,  "label_id" : 3, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" },
-	{ "service_id" : 4,  "label_id" : 5, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" },
-	{ "service_id" : 5,  "label_id" : 5, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" },
-	{ "service_id" : 5,  "label_id" : 4, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" },
-	{ "service_id" : 17, "label_id" : 3, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" },
-	{ "service_id" : 17, "label_id" : 6, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" },
-	{ "service_id" : 9,  "label_id" : 2, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" },
-	{ "service_id" : 16, "label_id" : 6, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" },
-	{ "service_id" : 16, "label_id" : 2, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" },
-	{ "service_id" : 1,  "label_id" : 4, "upd_time" : "2026-07-20T09:00:00.000Z", "cre_time" : "2026-07-20T09:00:00.000Z", "upd_id" : null, "cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862" }
-]}
+	"service_label": [
+		{
+			"service_id": 4,
+			"label_id": 3,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 4,
+			"label_id": 5,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 5,
+			"label_id": 5,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 5,
+			"label_id": 4,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 17,
+			"label_id": 3,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 17,
+			"label_id": 6,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 9,
+			"label_id": 2,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 16,
+			"label_id": 6,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 16,
+			"label_id": 2,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 1,
+			"label_id": 4,
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"service_id": 9,
+			"label_id": 7,
+			"upd_time": "2026-08-01T09:00:00.000Z",
+			"cre_time": "2026-08-01T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		}
+	]
+}
 
 
 {
-"vendor_accounts": [
-	{
-		"id" : "019fb652-df72-7992-989e-f456194edf8c",
-		"service_vendor_id" : 1,
-		"account" : "vendor01@example.com",
-		"password_hash" : "$2b$12$zXdj9hD.ojcsScPc0GevD.SZtch9m/ApgFBjbOGyRv2dxo7OWT9kS",
-		"contact_name" : null,
-		"contact_name_hash" : "rPl5zFhOHPnBjGW/+unlPLwYY0+QBCByzBFr1bc3W+0=",
-		"contact_mobile" : null,
-		"contact_mobile_hash" : "IPrwW6zPikd/oze3fArLDov/d/NGZP7sagV7088jI1s=",
-		"contact_email" : null,
-		"contact_email_hash" : "6jHoR0+1GBsBdQ1NGQVXJfdAS/ILhk8qniDK2xzGrpo=",
-		"is_2fa_enabled" : "0",
-		"totp_secret" : null,
-		"last_login_time" : null,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : "019fb652-df73-7214-8378-0811dffa943f",
-		"service_vendor_id" : 2,
-		"account" : "vendor02@example.com",
-		"password_hash" : "$2b$12$Srg82Jkw68QcvvOB8.H81uJ8yjeVbdffU3mqooi/o.NsyA7Id4KFq",
-		"contact_name" : null,
-		"contact_name_hash" : "Pk0F97MIB7LbdiSvGCrAtGES/LIxtK2+RIgUmV2dvs8=",
-		"contact_mobile" : null,
-		"contact_mobile_hash" : "hSgEJQFF5z2Zc/uXiv+6atxRen68jyyTK7RL0k6G+7Y=",
-		"contact_email" : null,
-		"contact_email_hash" : "BiaqhKcaswMFyxiCmsaYc8klb77RyUjdI37zhM/NrWQ=",
-		"is_2fa_enabled" : "0",
-		"totp_secret" : null,
-		"last_login_time" : null,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : "019fb652-df75-7aa4-bd53-5a067b31d124",
-		"service_vendor_id" : 5,
-		"account" : "vendor03@example.com",
-		"password_hash" : "$2b$12$rnoKTWJJ2/yq6s1PyRzKoerh8yGSWvA0PRGOgzqFjWco3L6RDjO8m",
-		"contact_name" : null,
-		"contact_name_hash" : "IJ92oVl4JAwtZn39RGRjCnD9auhVSZfHHvu61zgouZ0=",
-		"contact_mobile" : null,
-		"contact_mobile_hash" : "3pKnoajv1/a4X2EJemcWLv1mfpSgY85r9kTmkK4QpZk=",
-		"contact_email" : null,
-		"contact_email_hash" : "hdwgfWIrDCIlIdbUrJXhkRk66NdQiN4htiXDx1o5RuU=",
-		"is_2fa_enabled" : "0",
-		"totp_secret" : null,
-		"last_login_time" : null,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	}
-]}
+	"vendor_accounts": [
+		{
+			"id": "019fb652-df72-7992-989e-f456194edf8c",
+			"service_vendor_id": 1,
+			"account": "vendor01@example.com",
+			"password_hash": "$2b$12$zXdj9hD.ojcsScPc0GevD.SZtch9m/ApgFBjbOGyRv2dxo7OWT9kS",
+			"contact_name": null,
+			"contact_name_hash": "rPl5zFhOHPnBjGW/+unlPLwYY0+QBCByzBFr1bc3W+0=",
+			"contact_mobile": null,
+			"contact_mobile_hash": "IPrwW6zPikd/oze3fArLDov/d/NGZP7sagV7088jI1s=",
+			"contact_email": null,
+			"contact_email_hash": "6jHoR0+1GBsBdQ1NGQVXJfdAS/ILhk8qniDK2xzGrpo=",
+			"is_2fa_enabled": "0",
+			"totp_secret": null,
+			"last_login_time": null,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"id": "019fb652-df73-7214-8378-0811dffa943f",
+			"service_vendor_id": 2,
+			"account": "vendor02@example.com",
+			"password_hash": "$2b$12$Srg82Jkw68QcvvOB8.H81uJ8yjeVbdffU3mqooi/o.NsyA7Id4KFq",
+			"contact_name": null,
+			"contact_name_hash": "Pk0F97MIB7LbdiSvGCrAtGES/LIxtK2+RIgUmV2dvs8=",
+			"contact_mobile": null,
+			"contact_mobile_hash": "hSgEJQFF5z2Zc/uXiv+6atxRen68jyyTK7RL0k6G+7Y=",
+			"contact_email": null,
+			"contact_email_hash": "BiaqhKcaswMFyxiCmsaYc8klb77RyUjdI37zhM/NrWQ=",
+			"is_2fa_enabled": "0",
+			"totp_secret": null,
+			"last_login_time": null,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"id": "019fb652-df75-7aa4-bd53-5a067b31d124",
+			"service_vendor_id": 5,
+			"account": "vendor03@example.com",
+			"password_hash": "$2b$12$rnoKTWJJ2/yq6s1PyRzKoerh8yGSWvA0PRGOgzqFjWco3L6RDjO8m",
+			"contact_name": null,
+			"contact_name_hash": "IJ92oVl4JAwtZn39RGRjCnD9auhVSZfHHvu61zgouZ0=",
+			"contact_mobile": null,
+			"contact_mobile_hash": "3pKnoajv1/a4X2EJemcWLv1mfpSgY85r9kTmkK4QpZk=",
+			"contact_email": null,
+			"contact_email_hash": "hdwgfWIrDCIlIdbUrJXhkRk66NdQiN4htiXDx1o5RuU=",
+			"is_2fa_enabled": "0",
+			"totp_secret": null,
+			"last_login_time": null,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		}
+	]
+}
 
 
 {
-"user_accounts": [
-	{
-		"id" : "019c0464-2d01-73f0-9f9b-d1392fdb941a",
-		"account" : "user01@example.com",
-		"password_hash" : "$2b$12$7jTRQGh.aLhYI7QZF8PNgOHiF6h4haAgXwFhaDIJ2zWhJM.afLRsO",
-		"contact_name" : null,
-		"contact_name_hash" : "BaRYTzyqah97chwumc8vXeldq5VyhnSS/FPHUNoGoRA=",
-		"contact_mobile" : null,
-		"contact_mobile_hash" : "1BBrG8mOcnO4AcLsq7CxvmOSoXhkHUaoTqN4vybRQuc=",
-		"contact_email" : null,
-		"contact_email_hash" : "Km0DdleX3U+qz7IHdutnNwarOhdJWlfMu5pb1OFupyI=",
-		"is_2fa_enabled" : "0",
-		"totp_secret" : null,
-		"last_login_time" : null,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : "019eee3f-841e-7048-ae67-0955b144f4f8",
-		"account" : "user02@example.com",
-		"password_hash" : "$2b$12$BdF18pZlODhDHjJzxSbJoeWrjrU/4ZQERrOApgUrzz1J7ycG3EBvG",
-		"contact_name" : null,
-		"contact_name_hash" : "71EHcIAsYp53nXncXtXfVH0uLSadVfduGkk8Y/V5nYg=",
-		"contact_mobile" : null,
-		"contact_mobile_hash" : "M56CeQmNImiXMupFLZ186Cuya8XkSYiCmVcSR/01ccE=",
-		"contact_email" : null,
-		"contact_email_hash" : "nn8cRGeAF04eqjlc5SG+uSqjEh70G29QzqSCs1yTbOw=",
-		"is_2fa_enabled" : "0",
-		"totp_secret" : null,
-		"last_login_time" : null,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : "019a52d3-7f6b-7a51-a53a-3c365f741b49",
-		"account" : "user03@example.com",
-		"password_hash" : "$2b$12$qDeupx06jtFXuUg.QOUUmuKnpg1oPyDTDgGx2JPRziWqRwj836dEG",
-		"contact_name" : null,
-		"contact_name_hash" : "Ayzn+r6Xb8J2zXcNsIL11+Tsz2e5tPf6ZfRf3X6HWMg=",
-		"contact_mobile" : null,
-		"contact_mobile_hash" : "BI97g09HesoIF/n6iUWAiGeJLKTKheQyVYKd04+hRgo=",
-		"contact_email" : null,
-		"contact_email_hash" : "5DkEP4KHnpx+vKDg39LUqz0/psxU6jBpQCFRzciMVUE=",
-		"is_2fa_enabled" : "0",
-		"totp_secret" : null,
-		"last_login_time" : null,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	},
-	{
-		"id" : "019fb652-df76-7490-bc44-2bc5d255512f",
-		"account" : "user04@example.com",
-		"password_hash" : "$2b$12$zXdj9hD.ojcsScPc0GevD.SZtch9m/ApgFBjbOGyRv2dxo7OWT9kS",
-		"contact_name" : null,
-		"contact_name_hash" : "rPl5zFhOHPnBjGW/+unlPLwYY0+QBCByzBFr1bc3W+0=",
-		"contact_mobile" : null,
-		"contact_mobile_hash" : "IPrwW6zPikd/oze3fArLDov/d/NGZP7sagV7088jI1s=",
-		"contact_email" : null,
-		"contact_email_hash" : "6jHoR0+1GBsBdQ1NGQVXJfdAS/ILhk8qniDK2xzGrpo=",
-		"is_2fa_enabled" : "0",
-		"totp_secret" : null,
-		"last_login_time" : null,
-		"is_enable" : "1",
-		"is_deleted" : "0",
-		"upd_time" : "2026-07-20T09:00:00.000Z",
-		"cre_time" : "2026-07-20T09:00:00.000Z",
-		"upd_id" : null,
-		"cre_id" : "019fb652-df6e-76b0-8ab0-2cb53abee862"
-	}
-]}
+	"user_accounts": [
+		{
+			"id": "019c0464-2d01-73f0-9f9b-d1392fdb941a",
+			"account": "user01@example.com",
+			"password_hash": "$2b$12$7jTRQGh.aLhYI7QZF8PNgOHiF6h4haAgXwFhaDIJ2zWhJM.afLRsO",
+			"contact_name": null,
+			"contact_name_hash": "BaRYTzyqah97chwumc8vXeldq5VyhnSS/FPHUNoGoRA=",
+			"contact_mobile": null,
+			"contact_mobile_hash": "1BBrG8mOcnO4AcLsq7CxvmOSoXhkHUaoTqN4vybRQuc=",
+			"contact_email": null,
+			"contact_email_hash": "Km0DdleX3U+qz7IHdutnNwarOhdJWlfMu5pb1OFupyI=",
+			"is_2fa_enabled": "0",
+			"totp_secret": null,
+			"last_login_time": null,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"id": "019eee3f-841e-7048-ae67-0955b144f4f8",
+			"account": "user02@example.com",
+			"password_hash": "$2b$12$BdF18pZlODhDHjJzxSbJoeWrjrU/4ZQERrOApgUrzz1J7ycG3EBvG",
+			"contact_name": null,
+			"contact_name_hash": "71EHcIAsYp53nXncXtXfVH0uLSadVfduGkk8Y/V5nYg=",
+			"contact_mobile": null,
+			"contact_mobile_hash": "M56CeQmNImiXMupFLZ186Cuya8XkSYiCmVcSR/01ccE=",
+			"contact_email": null,
+			"contact_email_hash": "nn8cRGeAF04eqjlc5SG+uSqjEh70G29QzqSCs1yTbOw=",
+			"is_2fa_enabled": "0",
+			"totp_secret": null,
+			"last_login_time": null,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"id": "019a52d3-7f6b-7a51-a53a-3c365f741b49",
+			"account": "user03@example.com",
+			"password_hash": "$2b$12$qDeupx06jtFXuUg.QOUUmuKnpg1oPyDTDgGx2JPRziWqRwj836dEG",
+			"contact_name": null,
+			"contact_name_hash": "Ayzn+r6Xb8J2zXcNsIL11+Tsz2e5tPf6ZfRf3X6HWMg=",
+			"contact_mobile": null,
+			"contact_mobile_hash": "BI97g09HesoIF/n6iUWAiGeJLKTKheQyVYKd04+hRgo=",
+			"contact_email": null,
+			"contact_email_hash": "5DkEP4KHnpx+vKDg39LUqz0/psxU6jBpQCFRzciMVUE=",
+			"is_2fa_enabled": "0",
+			"totp_secret": null,
+			"last_login_time": null,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		},
+		{
+			"id": "019fb652-df76-7490-bc44-2bc5d255512f",
+			"account": "user04@example.com",
+			"password_hash": "$2b$12$zXdj9hD.ojcsScPc0GevD.SZtch9m/ApgFBjbOGyRv2dxo7OWT9kS",
+			"contact_name": null,
+			"contact_name_hash": "rPl5zFhOHPnBjGW/+unlPLwYY0+QBCByzBFr1bc3W+0=",
+			"contact_mobile": null,
+			"contact_mobile_hash": "IPrwW6zPikd/oze3fArLDov/d/NGZP7sagV7088jI1s=",
+			"contact_email": null,
+			"contact_email_hash": "6jHoR0+1GBsBdQ1NGQVXJfdAS/ILhk8qniDK2xzGrpo=",
+			"is_2fa_enabled": "0",
+			"totp_secret": null,
+			"last_login_time": null,
+			"is_enable": "1",
+			"is_deleted": "0",
+			"upd_time": "2026-07-20T09:00:00.000Z",
+			"cre_time": "2026-07-20T09:00:00.000Z",
+			"upd_id": null,
+			"cre_id": "019fb652-df6e-76b0-8ab0-2cb53abee862"
+		}
+	]
+}

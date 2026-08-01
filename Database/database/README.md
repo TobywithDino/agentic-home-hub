@@ -103,13 +103,21 @@ mms_order_record（訂單主檔）──record_id── mms_order_review（訂�
 
 ### C. 標籤（`account_and_label.sql`）
 
-**`label`**（6筆，PK: `id`自增）— 服務特徵標籤主檔（`name`有UNIQUE約束）
+**`label`**（8筆，PK: `id`自增）— 服務特徵標籤主檔
 
-全部欄位 ✅ 滿，除了 `upd_id` ❌ 0/6（新增時尚無異動者）。6筆標籤內容：寵物友善、24小時營業、專業認證、免費估價、到府服務、快速到達。
+| 欄位 | 說明 | 種子資料 |
+|---|---|---|
+| `id`/`name`/`sort`/`is_enable`/`is_deleted`/時間戳/`cre_id` | 基本欄位 | ✅ 8/8 |
+| `upd_id` | 異動者編號 | ❌ 0/8（新增時尚無異動者） |
+| `service_type` | 所屬服務類型代碼（新增功能，對應`cms_homepage_service.type`，`NULL`=通用標籤） | ⚠️ 2/8（`id=7`中餐廳、`id=8`泰式料理皆為`"6"`；其餘6筆為`NULL`） |
 
-**`service_label`**（10筆，PK: 複合`service_id`+`label_id`）— 服務與標籤多對多橋接表
+8筆標籤內容：寵物友善、24小時營業、專業認證、免費估價、到府服務、快速到達（皆為通用標籤,`service_type=NULL`）、中餐廳、泰式料理（皆為`type=6`餐廳訂位專屬標籤）。
 
-全部欄位 ✅ 滿（`service_id`/`label_id`/時間戳/`cre_id`），`upd_id` ❌ 0/10。涵蓋 service_id：1,4,5,9,16,17。
+`name`唯一性範圍由全域改為「同一`service_type`內」（`UNIQUE(service_type, name)`），不同類型可以有相同名稱的專屬標籤；通用標籤（`service_type IS NULL`）另用 partial unique index（`label_name_universal_key`）保證全域名稱唯一（因PostgreSQL的`UNIQUE`約束不會擋多筆NULL值互相衝突）。
+
+**`service_label`**（11筆，PK: 複合`service_id`+`label_id`）— 服務與標籤多對多橋接表
+
+全部欄位 ✅ 滿（`service_id`/`label_id`/時間戳/`cre_id`），`upd_id` ❌ 0/11。涵蓋 service_id：1,4,5,9,16,17。其中`service_id=9`（餐廳訂位）額外關聯到`label_id=7`（中餐廳，`type=6`專屬標籤），示範專屬標籤的實際使用情境。
 
 **`vendor_accounts`**（3筆，PK: `id` uuid）— 服務商後台登入帳號
 
@@ -248,7 +256,7 @@ mms_order_record（訂單主檔）──record_id── mms_order_review（訂�
 |---|---|---|
 | `縣市區域範例資料.json` | `sys_county`, `sys_district` | 22 + 200 |
 | `相關主檔設定.json` | `cms_homepage_service_vendor`, `cms_homepage_service` | 6 + 8 |
-| `帳號與標籤範例資料.json` | `label`, `service_label`, `vendor_accounts`, `user_accounts` | 6 + 10 + 3 + 4 |
+| `帳號與標籤範例資料.json` | `label`, `service_label`, `vendor_accounts`, `user_accounts` | 8 + 11 + 3 + 4 |
 | `諮詢單相關範例資料.json` | `pms_form`, `pms_form_group`, `pms_form_topic`, `pms_topic_media`, `pms_topic_option`, `pms_topic_county_district_relation`, `pms_form_feedback` | 1+3+7+1+6+1+1 |
 | `order_record範例資料.json`（`.csv`為同內容備用格式） | `mms_order_record` | 99 |
 | `order_review範例資料.json` | `mms_order_review` | 5 |
