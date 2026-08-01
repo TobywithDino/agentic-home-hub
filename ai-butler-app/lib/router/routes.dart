@@ -11,8 +11,26 @@ class Routes {
   static const String account = '/account';
 
   static const String vendors = '/vendors';
-  static String vendorDetail(int vendorId) => '/vendors/$vendorId';
-  static String form(int formId) => '/forms/$formId';
+
+  /// 服務商詳情。
+  ///
+  /// [serviceType] 帶入使用者當前瀏覽的服務類型，詳情頁只會列出該類型的
+  /// 服務項目；不帶則列出該商家全部服務。
+  static String vendorDetail(int vendorId, {String? serviceType}) {
+    if (serviceType == null || serviceType.isEmpty) return '/vendors/$vendorId';
+    return '/vendors/$vendorId?serviceType=$serviceType';
+  }
+
+  /// 諮詢單填寫頁。
+  ///
+  /// [serviceId] 必須從服務項目頁帶進來：BFF 的 `GET /app-api/forms/{id}/full`
+  /// 回應的 `form` 物件沒有 `service_id` 欄位，只靠表單自己推不出來，
+  /// 少帶就會用 0 送出 feedback。
+  static String form(int formId, {int? serviceId}) {
+    if (serviceId == null || serviceId == 0) return '/forms/$formId';
+    return '/forms/$formId?serviceId=$serviceId';
+  }
+
   static String orderDetail(String orderNo) => '/orders/detail/$orderNo';
   static const String chat = '/chat';
 }
