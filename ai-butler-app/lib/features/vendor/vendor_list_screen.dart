@@ -252,8 +252,13 @@ class _VendorListScreenState extends ConsumerState<VendorListScreen> {
                       enabled: currentQuery.page == 1, // 第一頁才播動畫
                       child: _VendorCard(
                         vendor: vendor,
-                        onTap: () =>
-                            context.push(Routes.vendorDetail(vendor.vendorId)),
+                        onTap: () => context.push(
+                          // 帶上當前瀏覽的服務類型，詳情頁只列該類型的服務。
+                          Routes.vendorDetail(
+                            vendor.vendorId,
+                            serviceType: widget.serviceId?.toString(),
+                          ),
+                        ),
                       ),
                     );
                   },

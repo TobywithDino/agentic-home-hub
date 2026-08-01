@@ -58,6 +58,23 @@ class ApiEndpoints {
   static const String aiClassify = '/ai/classify';
   static const String aiPrefill = '/ai/prefill';
 
+  // === 廠商底下的服務列表 ===
+  // GET /app-api/vendors/{service_vendor_id}/services[?service_type=]
+  //
+  // 帶 serviceType 時只回該類型的服務；不帶則回該廠商名下全部服務。
+  static String vendorServices(int serviceVendorId, {String? serviceType}) {
+    final path = '/app-api/vendors/$serviceVendorId/services';
+    if (serviceType == null || serviceType.isEmpty) return path;
+    return '$path?service_type=$serviceType';
+  }
+
+  // === 標籤（依服務類型） ===
+  // GET /app-api/labels?service_type={type}
+  static String labels({String? serviceType}) {
+    if (serviceType == null) return '/app-api/labels';
+    return '/app-api/labels?service_type=$serviceType';
+  }
+
   // === 地區主檔 ===
   // TODO(backend): 確認縣市/行政區是由 API 提供或 App 內建靜態資料
   static const String counties = '/regions/counties';

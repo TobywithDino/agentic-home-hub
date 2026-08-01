@@ -17,14 +17,21 @@ import 'package:ai_butler_app/domain/models/form_definition.dart';
 import 'package:ai_butler_app/domain/models/topic_type.dart';
 import 'package:ai_butler_app/features/form/topic_widgets.dart';
 import 'package:ai_butler_app/providers/form_providers.dart';
+import 'package:ai_butler_app/providers/order_providers.dart';
 import 'package:ai_butler_app/providers/repository_providers.dart';
 import 'package:ai_butler_app/domain/logic/form_answer_serializer.dart';
 
 /// 彈性諮詢單填寫畫面（Requirement 7、8、9）。
 class FormScreen extends ConsumerStatefulWidget {
-  const FormScreen({super.key, required this.formId});
+  const FormScreen({super.key, required this.formId, this.serviceId});
 
   final int formId;
+
+  /// 由服務項目頁帶入的 `cms_homepage_service.id`。
+  ///
+  /// BFF 的 `GET /app-api/forms/{id}/full` 回應不含 `service_id`，
+  /// 因此 [FormDefinition.serviceId] 會是 0；建立 feedback 時優先用這個值。
+  final int? serviceId;
 
   @override
   ConsumerState<FormScreen> createState() => _FormScreenState();
@@ -149,8 +156,15 @@ class _FormScreenState extends ConsumerState<FormScreen> {
           FormAnswerSerializer.toFeedbackContent(definition, answers);
       final contact = _extractContact(definition, answers);
 
+      // 優先用路由帶進來的 service_id；表單 API 沒有這個欄位，
+      // definition.serviceId 幾乎永遠是 0。
+      final resolvedServiceId =
+          (widget.serviceId != null && widget.serviceId != 0)
+              ? widget.serviceId!
+              : definition.serviceId;
+
       final draft = FeedbackDraft(
-        serviceId: definition.serviceId,
+        serviceId: resolvedServiceId,
         formId: definition.formId,
         formType: definition.type,
         feedbackContent: content,
@@ -167,6 +181,8 @@ class _FormScreenState extends ConsumerState<FormScreen> {
       ref.read(formAnswersProvider(definition.formId).notifier).reset();
       // 送出成功刪除草稿（Requirement 8.12）
       await ref.read(draftStoreProvider).delete(definition.formId);
+      // 讓「訂單紀錄」立即看到這張新諮詢單，不必手動下拉重整。
+      ref.invalidate(orderInboxProvider);
 
       if (mounted) {
         await showDialog<void>(
