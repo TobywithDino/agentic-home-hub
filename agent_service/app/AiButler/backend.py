@@ -106,6 +106,86 @@ class BackendClient:
 
         return await self._get(f"/app-api/users/{inbr_account_id}")
 
+    # ------------------------------------------------------------------
+    # 可用標籤（通用 + 該服務類型專屬）
+    # 對應 GET /app-api/labels
+    #
+    # 為什麼要有這支：標籤不能寫死在 agent 裡。label 表有 service_type 欄位，
+    # 餐廳訂位才有「中餐廳」「泰式料理」這種專屬標籤，寫死就永遠篩不到。
+    # ------------------------------------------------------------------
+    async def list_labels(self, service_type: str | None = None) -> list[dict[str, Any]]:
+        if not self._enabled:
+            return _stub_labels(service_type)
+
+        return await self._get("/app-api/labels", service_type=service_type)
+
+    # ------------------------------------------------------------------
+    # 某服務商名下的服務項目
+    # 對應 GET /app-api/vendors/{id}/services
+    # ------------------------------------------------------------------
+    async def list_vendor_services(
+        self, service_vendor_id: int, service_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        if not self._enabled:
+            return _stub_vendor_services(service_vendor_id, service_type)
+
+        return await self._get(
+            f"/app-api/vendors/{service_vendor_id}/services", service_type=service_type
+        )
+
+    # ------------------------------------------------------------------
+    # 某服務項目的評價
+    # 對應 GET /app-api/services/{id}/reviews
+    #
+    # ⚠️ 這支回傳的是完整 ReviewOut，含 inbr_account_id / order_no 等
+    # 身分關聯欄位。tool 層一定要裁掉才能給模型，否則會進 context 與
+    # CloudWatch log，也可能被模型講給使用者聽。
+    # ------------------------------------------------------------------
+    async def get_service_reviews(self, service_id: int) -> list[dict[str, Any]]:
+        if not self._enabled:
+            return _stub_reviews(service_id)
+
+        try:
+            return await self._get(f"/app-api/services/{service_id}/reviews")
+        except BackendError as exc:
+            # 實測會 404（api_server 對某些 service_id 回「服務項目不存在」）。
+            # 當成「沒有評價」而不是讓整個 tool 掛掉 —— 摘要可能還是拿得到，
+            # 那對使用者仍有價值。
+            if "404" in str(exc):
+                return []
+            raise
+
+    # ------------------------------------------------------------------
+    # 某服務項目的評價 AI 摘要
+    # 對應 GET /app-api/services/{id}/review-summary
+    # ------------------------------------------------------------------
+    async def get_service_review_summary(
+        self, service_id: int
+    ) -> dict[str, Any] | None:
+        """尚未生成摘要時回 None（BFF 回 404），這是正常狀態不是錯誤。"""
+        if not self._enabled:
+            return _stub_review_summary(service_id)
+
+        try:
+            return await self._get(f"/app-api/services/{service_id}/review-summary")
+        except BackendError as exc:
+            if "404" in str(exc):
+                return None
+            raise
+
+    # ------------------------------------------------------------------
+    # 會員的訂單與諮詢單總覽
+    # 對應 GET /app-api/users/{id}/orders-overview
+    #
+    # ⚠️ 回傳含 member_name / member_phone / contact_* 等 PII，
+    # tool 層必須裁切。
+    # ------------------------------------------------------------------
+    async def get_orders_overview(self, inbr_account_id: str) -> dict[str, Any]:
+        if not self._enabled:
+            return _stub_orders_overview(inbr_account_id)
+
+        return await self._get(f"/app-api/users/{inbr_account_id}/orders-overview")
+
 
 # ==========================================================================
 # 假資料。形狀對齊 API_Reference.md，接上 bff_server 後這整段可以刪。
@@ -311,4 +391,164 @@ def _stub_user(inbr_account_id: str) -> dict[str, Any]:
         "contact_name": "王小明",
         "contact_mobile": "0912345678",
         "contact_email": "user01@example.com",
+    }
+
+
+# 通用標籤（service_type 為 null）+ 各類型專屬標籤，形狀照 GET /app-api/labels
+_STUB_COMMON_LABELS: list[dict[str, Any]] = [
+    {"id": 1, "name": "寵物友善"},
+    {"id": 2, "name": "24小時營業"},
+    {"id": 3, "name": "專業認證"},
+    {"id": 4, "name": "免費估價"},
+    {"id": 5, "name": "到府服務"},
+    {"id": 6, "name": "快速到達"},
+]
+
+_STUB_TYPE_LABELS: dict[str, list[dict[str, Any]]] = {
+    "6": [{"id": 7, "name": "中餐廳"}, {"id": 8, "name": "泰式料理"}],
+}
+
+
+def _stub_labels(service_type: str | None) -> list[dict[str, Any]]:
+    extra = _STUB_TYPE_LABELS.get(str(service_type), []) if service_type else []
+    return _STUB_COMMON_LABELS + extra
+
+
+def _stub_vendor_services(
+    service_vendor_id: int, service_type: str | None
+) -> list[dict[str, Any]]:
+    """從 _STUB_VENDORS 反查該商家的服務項目，不另外維護一份。"""
+    out: list[dict[str, Any]] = []
+    for stype, vendors in _STUB_VENDORS.items():
+        if service_type is not None and str(service_type) != stype:
+            continue
+        for v in vendors:
+            if v["id"] != service_vendor_id:
+                continue
+            out.extend(v.get("matched_services", []))
+    return out
+
+
+# 刻意保留 inbr_account_id / order_no / cre_id 等 PII 欄位，
+# 這樣離線測試就能驗證 tool 層真的有裁掉它們。
+_STUB_REVIEWS: dict[int, list[dict[str, Any]]] = {
+    6001: [
+        {
+            "record_id": 9101,
+            "order_no": "ORD20260710000001",
+            "service_vendor_id": 101,
+            "service_id": 6001,
+            "inbr_account_id": "00000000-0000-0000-0000-000000000001",
+            "overall_rating": 5,
+            "rating_detail": {"food": 5, "service": 4},
+            "review_content": "串燒很好吃，服務也親切",
+            "media": None,
+            "status": "01",
+            "is_deleted": False,
+            "cre_id": "00000000-0000-0000-0000-000000000001",
+            "cre_time": "2026-07-10T12:00:00Z",
+            "upd_id": None,
+            "upd_time": None,
+        },
+        {
+            "record_id": 9102,
+            "order_no": "ORD20260715000002",
+            "service_vendor_id": 101,
+            "service_id": 6001,
+            "inbr_account_id": "00000000-0000-0000-0000-000000000002",
+            "overall_rating": 3,
+            "rating_detail": None,
+            "review_content": "位子有點擠，東西還可以",
+            "media": None,
+            "status": "01",
+            "is_deleted": False,
+            "cre_id": "00000000-0000-0000-0000-000000000002",
+            "cre_time": "2026-07-15T19:30:00Z",
+            "upd_id": None,
+            "upd_time": None,
+        },
+    ],
+}
+
+
+def _stub_reviews(service_id: int) -> list[dict[str, Any]]:
+    return _STUB_REVIEWS.get(service_id, [])
+
+
+def _stub_review_summary(service_id: int) -> dict[str, Any] | None:
+    if service_id != 6001:
+        return None  # 對齊真實行為：沒生成過摘要時 BFF 回 404
+    return {
+        "service_id": 6001,
+        "service_vendor_id": 101,
+        "service_name": "晚餐訂位",
+        "summary_content": "整體評價正向，串燒與服務態度受好評，座位空間偏小。",
+        "summary_highlights": {"pros": ["串燒好吃", "服務親切"], "cons": ["座位擠"]},
+        "sentiment_stats": {"positive": 1, "neutral": 1, "negative": 0},
+        "source_review_count": 2,
+        "source_avg_rating": 4.0,
+        "generate_status": "02",
+        "is_stale": False,
+    }
+
+
+def _stub_orders_overview(inbr_account_id: str) -> dict[str, Any]:
+    """形狀照真實回應，含 member_* / contact_* 等 PII 欄位供裁切測試。"""
+    return {
+        "feedbacks": [
+            {
+                "feedback_no": "FB20260720000001",
+                "service_id": 2001,
+                "form_id": 9003,
+                "status": "0",
+                "is_read": "0",
+                "contact_name": "王小明",
+                "contact_mobile": "0912345678",
+                "contact_email": "user01@example.com",
+                "contact_mobile_hash": "should-be-stripped",
+                "inbr_account_id": inbr_account_id,
+                "description": "想問洗衣機清洗價格",
+                "feedback_content": {},
+                "cre_time": "2026-07-20T10:00:00Z",
+            }
+        ],
+        "orders": [
+            {
+                "record_id": 8801,
+                "order_no": "ORD20260701000010",
+                "order_type": "02",
+                "order_status": "80",
+                "comment_status": "01",
+                "service_id": 6001,
+                "service_vendor_id": 101,
+                "final_amount": 1800.0,
+                "original_amount": 2000.0,
+                "service_time": "2026-07-01T19:00:00Z",
+                "order_time": "2026-06-28T09:00:00Z",
+                "member_name": "王小明",
+                "member_phone": "0912345678",
+                "member_email": "user01@example.com",
+                "member_phone_hash": "should-be-stripped",
+                "inbr_account_id": inbr_account_id,
+                "review": None,
+                "cre_time": "2026-06-28T09:00:00Z",
+            },
+            {
+                "record_id": 8802,
+                "order_no": "ORD20260620000009",
+                "order_type": "01",
+                "order_status": "13",
+                "comment_status": "00",
+                "service_id": 2001,
+                "service_vendor_id": 201,
+                "final_amount": 2200.0,
+                "service_time": None,
+                "order_time": "2026-06-20T14:00:00Z",
+                "member_name": "王小明",
+                "member_phone": "0912345678",
+                "inbr_account_id": inbr_account_id,
+                "review": None,
+                "cre_time": "2026-06-20T14:00:00Z",
+            },
+        ],
     }

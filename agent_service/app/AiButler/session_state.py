@@ -25,6 +25,7 @@ from typing import Any
 @dataclass
 class SessionState:
     vendors: list[dict[str, Any]] = field(default_factory=list)
+    orders: list[dict[str, Any]] = field(default_factory=list)
     selected_vendor_id: int | None = None
     selected_service_id: int | None = None
     form: dict[str, Any] | None = None
@@ -39,6 +40,23 @@ class SessionState:
                 "service_ids": [int(s["service_id"]) for s in v.get("services", [])],
             }
             for v in vendors
+        ]
+        self.touched_at = time.time()
+
+    def remember_orders(self, orders: list[dict[str, Any]]) -> None:
+        """記下已查到的訂單。
+
+        跟 vendors 同理：使用者說「幫我評價第一筆」時，模型若沒有這份對照
+        就會把 1 當成 record_id 傳出去。只留最近 10 筆，避免提示無限長大。
+        """
+        self.orders = [
+            {
+                "record_id": int(o["record_id"]),
+                "order_no": o.get("order_no", ""),
+                "status_label": o.get("order_status_label", ""),
+                "can_review": bool(o.get("can_review")),
+            }
+            for o in orders[:10]
         ]
         self.touched_at = time.time()
 
@@ -73,7 +91,7 @@ class SessionState:
 
     def render(self) -> str:
         """渲染成系統提示用的文字。沒東西就回空字串，不要塞無意義的區塊。"""
-        if not self.vendors and not self.form:
+        if not self.vendors and not self.form and not self.orders:
             return ""
 
         lines: list[str] = []
@@ -101,6 +119,15 @@ class SessionState:
                 mark = "必填" if t["required"] else "選填"
                 lines.append(
                     f"- topic_id={t['topic_id']}：{t['title']}（{mark}，型別 {t['type']}）"
+                )
+
+        if self.orders:
+            lines.append("\n已查到的訂單（propose_review 要用這裡的 record_id）：")
+            for o in self.orders:
+                mark = "可評價" if o["can_review"] else "不可評價"
+                lines.append(
+                    f"- {o['order_no']}：record_id={o['record_id']}"
+                    f"（{o['status_label']}，{mark}）"
                 )
 
         return "\n## 本次對話已確認的資料\n" + "\n".join(lines) + "\n"

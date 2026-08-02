@@ -49,6 +49,44 @@ class PrefillCard extends ButlerChunk {
   final String summary;
 }
 
+/// 非表單類的草稿確認卡（訂單評價、個人資料）。
+///
+/// 諮詢單草稿有表單可以帶使用者去填，走 [PrefillCard]；評價與個資沒有表單，
+/// 所以用這張通用卡。
+///
+/// `submitMethod` / `submitPath` 由 agent 端的草稿自己描述，App 只要重播
+/// method + path + payload 就能送出，不必用 `kind` switch 出路徑 ——
+/// 之後 agent 新增草稿類型，這裡不用跟著改。
+///
+/// 對應 agent_service/app/AiButler/schemas.py 的 OrderDraft.to_event_payload。
+class DraftCard extends ButlerChunk {
+  const DraftCard({
+    required this.draftId,
+    required this.kind,
+    required this.kindLabel,
+    required this.summary,
+    required this.submitMethod,
+    required this.submitPath,
+    required this.payload,
+  });
+
+  final String draftId;
+
+  /// `review` | `profile`（`feedback` 會被映射成 [PrefillCard]）
+  final String kind;
+
+  /// 給使用者看的類型名稱，例如「訂單評價」
+  final String kindLabel;
+  final String summary;
+
+  /// 送出時要用的 HTTP method 與 bff_server 路徑
+  final String submitMethod;
+  final String submitPath;
+
+  /// request body，欄位已對齊 `submitPath` 那支端點
+  final Map<String, dynamic> payload;
+}
+
 /// 串流完成標記。
 class Done extends ButlerChunk {
   const Done();

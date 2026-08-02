@@ -23,7 +23,14 @@ from typing import Any, Awaitable, Callable, Protocol
 
 from backend import BackendClient, BackendError
 from config import get_settings
-from schemas import SERVICE_TYPE_LABELS, OrderDraft, draft_store
+from schemas import (
+    COMMENT_STATUS_LABELS,
+    ORDER_TYPE_LABELS,
+    SERVICE_TYPE_LABELS,
+    OrderDraft,
+    draft_store,
+    order_status_label,
+)
 from session_state import SessionState
 
 log = logging.getLogger(__name__)
@@ -45,14 +52,45 @@ TOPIC_TYPES: dict[str, str] = {
 # 管家不能代填的題型，遇到要跟使用者說明稍後在表單補
 UNFILLABLE_TOPIC_TYPES = {"6"}
 
-LABELS: dict[int, str] = {
-    1: "寵物友善",
-    2: "24小時營業",
-    3: "專業認證",
-    4: "免費估價",
-    5: "到府服務",
-    6: "快速到達",
-}
+# 訂單/諮詢單回給模型時要保留的欄位。
+#
+# 用白名單而不是黑名單：真實訂單有 48 個欄位，含 member_name / member_phone /
+# member_email 與一堆 *_hash。黑名單漏一個就把 PII 送進模型 context 和
+# CloudWatch log，白名單漏一個只是模型少看到一項資訊。
+_ORDER_KEEP_FIELDS = (
+    "record_id",
+    "order_no",
+    "order_type",
+    "order_status",
+    "comment_status",
+    "service_id",
+    "service_vendor_id",
+    "final_amount",
+    "service_time",
+    "order_time",
+    "cre_time",
+)
+
+_FEEDBACK_KEEP_FIELDS = (
+    "feedback_no",
+    "service_id",
+    "form_id",
+    "status",
+    "is_read",
+    "description",
+    "cre_time",
+)
+
+# 評價回給模型時只留這些。刻意排除 inbr_account_id / order_no / cre_id /
+# upd_id —— 那些是評價者的身分關聯，模型不需要，也不該有機會講出來。
+_REVIEW_KEEP_FIELDS = (
+    "overall_rating",
+    "rating_detail",
+    "review_content",
+    "cre_time",
+)
+
+_FEEDBACK_STATUS_LABELS = {"0": "未處理", "1": "處理中", "2": "已完成"}
 
 
 class EventEmitter(Protocol):
@@ -139,8 +177,10 @@ async def dispatch(
                 "type": "array",
                 "items": {"type": "integer"},
                 "description": (
-                    "篩選標籤，只在使用者明確提到時才傳："
-                    + "、".join(f"{k}={v}" for k, v in LABELS.items())
+                    "篩選標籤的 id，只在使用者明確提到偏好時才傳。"
+                    "**必須先呼叫 list_service_labels 取得該服務類型的合法 label id**，"
+                    "不要自己猜數字 —— 每種服務類型的專屬標籤不同"
+                    "（例如餐廳訂位才有「中餐廳」「泰式料理」）。"
                 ),
             },
         },
@@ -356,6 +396,275 @@ async def get_my_profile(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
 
 
 # ==========================================================================
+# READ：可用標籤（取代寫死的清單）
+# ==========================================================================
+@tool(
+    name="list_service_labels",
+    description=(
+        "取得某服務類型可用的篩選標籤。使用者提到偏好條件"
+        "（例如「有寵物友善的」「要中式的」「24小時的」）時，"
+        "先呼叫這個拿到 label id，再把 id 傳給 find_service_vendors 的 label_ids。"
+        "不要自己猜 label id。"
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "service_type": {
+                "type": "string",
+                "enum": list(SERVICE_TYPE_LABELS.keys()),
+                "description": "服務類型代碼。會回傳「通用標籤 + 該類型專屬標籤」",
+            },
+        },
+        "required": ["service_type"],
+    },
+)
+async def list_service_labels(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    service_type = str(args["service_type"])
+    labels = await ctx.backend.list_labels(service_type)
+
+    return {
+        "service_type": service_type,
+        "labels": [{"label_id": l["id"], "name": l["name"]} for l in labels],
+        "note": (
+            "使用者的說法要對應到最接近的標籤，對不上就不要傳 label_ids，"
+            "硬套會篩掉所有結果。可以多個一起傳，但那是「同時滿足全部條件」。"
+        ),
+    }
+
+
+# ==========================================================================
+# READ：某服務商名下的服務項目
+# ==========================================================================
+@tool(
+    name="list_vendor_services",
+    description=(
+        "列出某服務商提供的所有服務項目。"
+        "使用者問「這家還有什麼服務」「他們也做清潔嗎」時用這個。"
+        "也可用來在同一家裡換一個服務項目。"
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "vendor_id": {
+                "type": "integer",
+                "description": "服務商 id，用 find_service_vendors 回傳的 vendor_id",
+            },
+            "service_type": {
+                "type": "string",
+                "enum": list(SERVICE_TYPE_LABELS.keys()),
+                "description": "只看某一類型時才傳，不傳則回傳該商家全部服務項目",
+            },
+        },
+        "required": ["vendor_id"],
+    },
+)
+async def list_vendor_services(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    vendor_id = int(args["vendor_id"])
+    services = await ctx.backend.list_vendor_services(
+        vendor_id, args.get("service_type")
+    )
+
+    if not services:
+        return {
+            "error": "NoServicesFound",
+            "detail": (
+                f"vendor_id={vendor_id} 查不到服務項目。確認你傳的是"
+                " find_service_vendors 回傳的 vendor_id，不是「第幾家」的序號。"
+            ),
+        }
+
+    return {
+        "vendor_id": vendor_id,
+        "services": [
+            {
+                "service_id": s["id"],
+                "name": s.get("name", ""),
+                "service_type": str(s.get("type", "")),
+                "service_type_label": SERVICE_TYPE_LABELS.get(str(s.get("type")), ""),
+                "description": s.get("description") or "",
+                "has_form": s.get("form_id") is not None,
+            }
+            for s in services
+        ],
+        "note": "只有 has_form=true 的服務項目能線上填單。",
+    }
+
+
+# ==========================================================================
+# READ：服務項目的評價與 AI 摘要
+# ==========================================================================
+@tool(
+    name="get_service_reviews",
+    description=(
+        "查某個服務項目的評價與 AI 摘要。"
+        "使用者問「評價好嗎」「別人怎麼說」「推薦哪一家」時用這個。"
+        "有 AI 摘要就以摘要為主回答，沒有才引用個別評價。"
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "service_id": {
+                "type": "integer",
+                "description": (
+                    "服務項目 id，用 find_service_vendors 回傳的"
+                    " services[].service_id。注意評價是掛在服務項目上，不是商家上。"
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "description": "最多回幾筆個別評價，預設 5。摘要不受此限制。",
+            },
+        },
+        "required": ["service_id"],
+    },
+)
+async def get_service_reviews(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    service_id = int(args["service_id"])
+    limit = max(1, min(int(args.get("limit") or 5), 20))
+
+    reviews = await ctx.backend.get_service_reviews(service_id)
+    summary = await ctx.backend.get_service_review_summary(service_id)
+
+    if not reviews and not summary:
+        return {
+            "service_id": service_id,
+            "review_count": 0,
+            "note": (
+                "這個服務項目目前還沒有任何評價。老實告訴使用者沒有評價可參考，"
+                "不要憑服務商名稱或描述編造評價內容。"
+            ),
+        }
+
+    # 新的先給模型看，舊評價的參考價值較低
+    ordered = sorted(reviews, key=lambda r: str(r.get("cre_time") or ""), reverse=True)
+    ratings = [r["overall_rating"] for r in reviews if r.get("overall_rating") is not None]
+
+    out: dict[str, Any] = {
+        "service_id": service_id,
+        "review_count": len(reviews),
+        # 逐筆裁成白名單欄位，把評價者身分關聯（inbr_account_id / order_no）濾掉
+        "recent_reviews": [
+            {k: r[k] for k in _REVIEW_KEEP_FIELDS if r.get(k) is not None}
+            for r in ordered[:limit]
+        ],
+    }
+    if ratings:
+        out["average_rating"] = round(sum(ratings) / len(ratings), 1)
+
+    if summary:
+        out["ai_summary"] = {
+            "content": summary.get("summary_content"),
+            "highlights": summary.get("summary_highlights"),
+            "based_on_review_count": summary.get("source_review_count"),
+            # is_stale=true 代表有新評價還沒納入摘要，講的時候別說得太絕對
+            "is_outdated": summary.get("is_stale"),
+        }
+
+    # 摘要與逐筆評價是兩張表，實測會不一致（摘要說有 3 筆、逐筆卻抓不到）。
+    # 不講清楚的話模型會同時說「有 3 筆評價」和「目前沒有評價」，自相矛盾。
+    if summary and not reviews:
+        out["note"] = (
+            "查不到逐筆評價，但有先前產生的 AI 摘要。回答時以摘要內容為準，"
+            "不要說「沒有評價」，也不要自己編出具體某一則評價的內容。"
+        )
+    elif reviews:
+        out["note"] = (
+            "recent_reviews 是實際評價內容，可以引用但不要逐字唸完。"
+            "有 ai_summary 時以摘要為主，個別評價當補充。"
+        )
+
+    return out
+
+
+# ==========================================================================
+# READ：我的訂單與諮詢單
+# ==========================================================================
+@tool(
+    name="list_my_orders",
+    description=(
+        "查目前使用者自己的訂單與諮詢單。"
+        "使用者問「我的訂單」「上次那筆好了嗎」「我約的時間是什麼時候」"
+        "「有什麼還沒評價」時用這個。不需要傳帳號，會自動用當前使用者。"
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "only_reviewable": {
+                "type": "boolean",
+                "description": (
+                    "只回「已完成且還沒評價」的訂單。"
+                    "使用者想寫評價時傳 true，可以少問一輪。"
+                ),
+            },
+        },
+        "required": [],
+    },
+)
+async def list_my_orders(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    data = await ctx.backend.get_orders_overview(ctx.actor_id)
+
+    orders: list[dict[str, Any]] = []
+    for o in data.get("orders") or []:
+        slim = {k: o[k] for k in _ORDER_KEEP_FIELDS if o.get(k) is not None}
+        # 代碼直接給模型它講不出人話，這裡翻好
+        slim["order_type_label"] = ORDER_TYPE_LABELS.get(str(o.get("order_type")), "")
+        slim["order_status_label"] = order_status_label(
+            o.get("order_type"), o.get("order_status")
+        )
+        slim["comment_status_label"] = COMMENT_STATUS_LABELS.get(
+            str(o.get("comment_status")), ""
+        )
+        slim["can_review"] = _can_review(o)
+        if review := o.get("review"):
+            slim["my_review"] = {
+                k: review[k] for k in _REVIEW_KEEP_FIELDS if review.get(k) is not None
+            }
+        orders.append(slim)
+
+    # 先記全部再篩。工作集是「這位使用者有哪些訂單 id」，不是「這次顯示了哪些」——
+    # 若只記篩選後的，使用者下一輪問到別筆訂單，模型就又要猜 record_id 了。
+    ctx.state.remember_orders(orders)
+
+    if args.get("only_reviewable"):
+        orders = [o for o in orders if o["can_review"]]
+
+    feedbacks = [
+        {
+            **{k: f[k] for k in _FEEDBACK_KEEP_FIELDS if f.get(k) is not None},
+            "status_label": _FEEDBACK_STATUS_LABELS.get(str(f.get("status")), ""),
+        }
+        for f in (data.get("feedbacks") or [])
+    ]
+
+    result: dict[str, Any] = {
+        "order_count": len(orders),
+        "orders": orders,
+        "note": (
+            "record_id 是內部 id，回答使用者時講 order_no 或服務名稱，不要唸 record_id。"
+            "can_review=true 才能呼叫 propose_review。"
+        ),
+    }
+    if not args.get("only_reviewable"):
+        result["pending_feedbacks"] = feedbacks
+        result["pending_feedback_count"] = len(feedbacks)
+    return result
+
+
+def _can_review(order: dict[str, Any]) -> bool:
+    """能不能評價。
+
+    條件跟 api_server 的驗證一致：訂單狀態必須是 80（已完成）、
+    且尚未評價過。這裡先判斷是為了不要讓模型產生註定被拒絕的草稿，
+    真正的把關仍在 api_server。
+    """
+    return (
+        str(order.get("order_status")) == "80"
+        and str(order.get("comment_status")) != "02"
+        and not order.get("review")
+    )
+
+
+# ==========================================================================
 # DRAFT：產生草稿
 # ==========================================================================
 @tool(
@@ -480,6 +789,8 @@ async def propose_submission(
         payload=payload,
         summary=args["summary"],
         actor_id=ctx.actor_id,
+        submit_method="POST",
+        submit_path="/app-api/feedbacks",
         ttl_seconds=settings.draft_ttl_seconds,
     )
     draft_store.put(draft)
@@ -599,3 +910,212 @@ async def _validate_against_form(
             }
 
     return None
+
+
+# ==========================================================================
+# DRAFT：訂單評價
+# ==========================================================================
+@tool(
+    name="propose_review",
+    description=(
+        "產生訂單評價草稿給使用者確認。**不會真的送出**，"
+        "只會在 App 上跳出確認卡片。"
+        "呼叫前必須先用 list_my_orders 確認該筆訂單 can_review=true。"
+        "呼叫後不要說「已經幫你評價了」，要說「請確認以下評價內容」。"
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "record_id": {
+                "type": "integer",
+                "description": (
+                    "訂單內部 id，用 list_my_orders 回傳的 record_id 照抄。"
+                    "不是 order_no，也不是「第幾筆」的序號。"
+                ),
+            },
+            "overall_rating": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5,
+                "description": "整體評分 1~5。使用者只說「很好」「不錯」時要問出幾分，不要自己決定。",
+            },
+            "review_content": {
+                "type": "string",
+                "description": (
+                    "評價文字。用使用者自己說的話整理，不要幫他加油添醋或補他沒說過的優點。"
+                ),
+            },
+            "rating_detail": {
+                "type": "object",
+                "description": (
+                    "分項評分，只在使用者明確分項評論時才傳，"
+                    "例如 {\"service\": 5, \"attitude\": 4}。值同樣是 1~5。"
+                ),
+            },
+        },
+        "required": ["record_id", "overall_rating"],
+    },
+)
+async def propose_review(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    settings = get_settings()
+    record_id = int(args["record_id"])
+
+    rating = int(args["overall_rating"])
+    if not 1 <= rating <= 5:
+        raise ValueError("overall_rating 必須是 1~5 的整數")
+
+    # 模型輸出當不可信輸入：record_id 必須真的是這位使用者的訂單，
+    # 而且狀態允許評價。不驗的話會產生註定被 api_server 打回來的草稿，
+    # 使用者按了「直接送出」才失敗，體驗更差。
+    overview = await ctx.backend.get_orders_overview(ctx.actor_id)
+    orders = {int(o["record_id"]): o for o in (overview.get("orders") or [])}
+
+    order = orders.get(record_id)
+    if order is None:
+        return {
+            "error": "OrderNotFound",
+            "detail": (
+                f"record_id={record_id} 不在這位使用者的訂單裡。"
+                f"他的訂單 record_id 是 {sorted(orders)}。"
+                "請重新呼叫 list_my_orders 取得正確的 record_id，不要用序號。"
+            ),
+        }
+
+    if not _can_review(order):
+        reason = (
+            "這筆訂單已經評價過了"
+            if str(order.get("comment_status")) == "02" or order.get("review")
+            else f"這筆訂單狀態是「{order_status_label(order.get('order_type'), order.get('order_status'))}」，"
+            "只有已完成的訂單才能評價"
+        )
+        return {
+            "error": "OrderNotReviewable",
+            "detail": (
+                f"{reason}。請告訴使用者原因，"
+                "或用 list_my_orders 的 only_reviewable=true 找出可評價的訂單。"
+            ),
+        }
+
+    detail = args.get("rating_detail") or None
+    if detail is not None:
+        bad = {k: v for k, v in detail.items() if not (isinstance(v, int) and 1 <= v <= 5)}
+        if bad:
+            raise ValueError(f"rating_detail 的值必須是 1~5 的整數，這些不合法：{bad}")
+
+    payload = {
+        "inbr_account_id": ctx.actor_id,
+        "overall_rating": rating,
+        "review_content": args.get("review_content"),
+        "rating_detail": detail,
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+
+    draft = OrderDraft(
+        kind="review",
+        service_id=order.get("service_id"),
+        payload=payload,
+        summary=args.get("summary")
+        or f"評價「{order.get('order_no')}」{rating} 星",
+        actor_id=ctx.actor_id,
+        submit_method="POST",
+        submit_path=f"/app-api/orders/{record_id}/review",
+        ttl_seconds=settings.draft_ttl_seconds,
+    )
+    draft_store.put(draft)
+    ctx.emit("draft", **draft.to_event_payload())
+
+    return {
+        "draft_id": draft.draft_id,
+        "status": "awaiting_user_confirmation",
+        "order_no": order.get("order_no"),
+    }
+
+
+# ==========================================================================
+# DRAFT：修改個人聯絡資料
+# ==========================================================================
+@tool(
+    name="propose_profile_update",
+    description=(
+        "產生修改個人聯絡資料的草稿給使用者確認。**不會真的修改**。"
+        "使用者說「幫我改手機」「我換 email 了」時用這個。"
+        "只傳要改的欄位，沒提到的不要傳。"
+        "呼叫後不要說「已經幫你改好了」，要說「請確認要改成這樣」。"
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "contact_name": {"type": "string", "description": "新的姓名"},
+            "contact_mobile": {
+                "type": "string",
+                "description": "新的手機號碼，09 開頭 10 碼",
+            },
+            "contact_email": {"type": "string", "description": "新的 Email"},
+        },
+        "required": [],
+    },
+)
+async def propose_profile_update(
+    ctx: ToolContext, args: dict[str, Any]
+) -> dict[str, Any]:
+    settings = get_settings()
+
+    fields = {
+        k: str(args[k]).strip()
+        for k in ("contact_name", "contact_mobile", "contact_email")
+        if args.get(k)
+    }
+    if not fields:
+        return {
+            "error": "NothingToUpdate",
+            "detail": "沒有任何要修改的欄位。先問使用者想改什麼（姓名／手機／Email）。",
+        }
+
+    if mobile := fields.get("contact_mobile"):
+        if not re.fullmatch(r"09\d{8}", mobile):
+            raise ValueError("contact_mobile 必須是 09 開頭的 10 碼手機號")
+
+    if email := fields.get("contact_email"):
+        # 只做基本形狀檢查，真正的驗證交給後端
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise ValueError(f"contact_email 格式看起來不對：{email}")
+
+    # 拿現值做對照，草稿卡片才能顯示「原本 → 改成」
+    current = await ctx.backend.get_user(ctx.actor_id)
+    changes = {
+        k: {"from": current.get(k), "to": v}
+        for k, v in fields.items()
+        if current.get(k) != v
+    }
+    if not changes:
+        return {
+            "error": "NoActualChange",
+            "detail": (
+                "要改的內容跟現在完全一樣，不需要修改。"
+                "跟使用者確認他是不是想改別的欄位。"
+            ),
+        }
+
+    labels = {"contact_name": "姓名", "contact_mobile": "手機", "contact_email": "Email"}
+    summary = "、".join(
+        f"{labels[k]}改成 {c['to']}" for k, c in changes.items()
+    )
+
+    draft = OrderDraft(
+        kind="profile",
+        payload={k: c["to"] for k, c in changes.items()},
+        summary=summary,
+        actor_id=ctx.actor_id,
+        submit_method="PATCH",
+        submit_path=f"/app-api/users/{ctx.actor_id}",
+        ttl_seconds=settings.draft_ttl_seconds,
+    )
+    draft_store.put(draft)
+    # changes 讓 App 的確認卡片能顯示前後對照，不用自己再查一次
+    ctx.emit("draft", changes=changes, **draft.to_event_payload())
+
+    return {
+        "draft_id": draft.draft_id,
+        "status": "awaiting_user_confirmation",
+        "changed_fields": sorted(changes),
+    }

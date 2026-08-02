@@ -61,13 +61,14 @@ agentic-home-hub/
 │       └── providers/ai_providers.dart              AI_SOURCE=remote 時切換到上面那支
 ├── ai-summary-lambda/        隊友負責：評論摘要 Lambda（Bedrock 產生 mms_review_summary）
 ├── vendor-admin-web/         隊友負責：商家後台前端（React + Vite + Tailwind）
-└── flutter_ai_script/        我方負責：AI 管家的 Flutter 參考實作（教學導覽，待併入 ai-butler-app）
+└── flutter_ai_script/        我方負責：導覽功能的參考實作。**沒有 pubspec.yaml，不是可執行專案**，
+    │                         無法 flutter analyze（會噴一堆 package 找不到，是預期的）
     └── lib/agent/
-        ├── agent_client.dart      SSE 客戶端
-        ├── agent_event.dart       SSE 事件模型（要跟 schemas.py 同步）
-        ├── draft_action_card.dart 「直接送出 / 帶我操作」分叉點
-        ├── tour.dart              錨點註冊表 + 服務→導覽藍圖對應
-        └── tour_runner.dart       光圈導覽執行（tutorial_coach_mark 1.3.3）
+        ├── agent_client.dart      已被取代 → ai-butler-app/lib/data/remote/http_butler_ai_service.dart
+        ├── agent_event.dart       已被取代 → 同上（事件協定看 ai-butler-app，別看這支）
+        ├── draft_action_card.dart 待併入：「直接送出 / 帶我操作」兩顆按鈕的分叉點
+        ├── tour.dart              待併入：服務類型→導覽藍圖對應 + answerOf() 讀 feedback_content
+        └── tour_runner.dart       待併入：光圈導覽執行（tutorial_coach_mark 1.3.3）
 ```
 
 ## 架構
@@ -206,21 +207,34 @@ agentcore logs               # 看 runtime 日誌
 
 ## agent_service 開發慣例
 
-- **tool 設計是資料驅動的，不寫死服務流程**。`get_service_form` 把 `pms_form` 的題目結構交給模型，模型自己決定怎麼問，所以一套 tool 就能處理全部 7 種服務類型。新增服務類型時通常只要加 `ServiceType` member，不用加 tool。
+- **tool 設計是資料驅動的，不寫死服務流程**。`get_service_form` 把 `pms_form` 的題目結構交給模型，模型自己決定怎麼問，所以一套 tool 就能處理全部 7 種服務類型。新增服務類型時通常只要加 `ServiceType` member，不用加 tool。同理 `list_service_labels` 取代了原本寫死的標籤 dict —— `label` 表有 `service_type` 欄位，餐廳訂位才有「中餐廳」「泰式料理」這種專屬標籤，寫死就永遠篩不到。**不要在 agent 裡再出現任何寫死的 id/名稱對應表。**
+- **tool 覆蓋範圍對齊 APP GUI**：讀取類 `find_service_vendors` / `list_service_labels` / `show_vendor_list` / `list_vendor_services` / `get_service_form` / `get_service_reviews` / `get_my_profile` / `list_my_orders`；草稿類 `propose_submission`（諮詢單）/ `propose_review`（訂單評價）/ `propose_profile_update`（個人資料）。登入刻意不給 tool —— 身分由呼叫端注入的 `actor_id` 決定。
+- **回給模型的資料一律用白名單裁欄位**，不要用黑名單。真實訂單有 48 個欄位含 `member_name`/`member_phone` 與大量 `*_hash`，評價含 `inbr_account_id`/`order_no`。黑名單漏一個就把 PII 送進模型 context 與 CloudWatch log（`dispatch` 會 log tool 參數），白名單漏一個只是模型少看到一項資訊。見 `tools.py` 的 `_ORDER_KEEP_FIELDS` / `_FEEDBACK_KEEP_FIELDS` / `_REVIEW_KEEP_FIELDS`。
+- **狀態代碼要在 tool 層翻成中文**再給模型，否則它講不出人話。注意 `order_status` 的語意**依 `order_type` 而異**（`01` 服務訂單有報價/尾款流程，其餘類型共用另一套），用 `schemas.py` 的 `order_status_label(order_type, order_status)`，不要自己查表。
+- **草稿自己描述「該送去哪」**。`OrderDraft` 帶 `submit_method` / `submit_path`，事件裡是 `submit: {method, path}`。前端重播 method + path + payload 即可送出，不用拿 `kind` switch 出路徑 —— 新增草稿類型時前端不必跟著改。`kind` 有 `feedback` / `review` / `profile` 三種，只有 `feedback` 有 `service_id`/`form_id`。
 - **模型輸出一律當不可信輸入**。`propose_submission` 會拿真實表單結構逐項驗證（form_id、service_id 歸屬、topic_id 存在、必填題齊全、單複選答案在 options 內）。實測模型會把序號當 id 傳（`vendor_id=2`、`form_id=1`），沒驗證就會產生錯誤草稿。
 - **tool 的 error 訊息要能教模型自我修正**，寫清楚「你可能傳錯什麼、正確值去哪裡拿」，不要只回「參數錯誤」。實測模型收到具體錯誤後會自己重抓正確 id 再試。
 - **跨輪的 id 靠 `session_state.py` 帶**，不靠模型記憶。`memory.load_history` 只還原純文字不還原 toolResult（Converse API 要求 toolResult 必須配對同一輪的 toolUse），所以已解析的 `vendor_id` / `form_id` / `topic_id` 要另外渲染進系統提示。
 - **`_consume` 的 toolUse input 是分片抵達的 JSON 字串**，必須累積到 `contentBlockStop` 才能 parse，對單一 delta 做 `json.loads` 會隨機失敗。
 - **entrypoint 要 yield dict，不要自己格式化 SSE**。`BedrockAgentCoreApp._convert_to_sse` 會把每個 yield 的值包成 `data: {json}\n\n`；自己先包一次會變成雙重包裝，前端解不出來。這就是 `schemas.event()` 回傳 dict 而不是字串的原因。
-- 事件型別（`text_delta` / `tool_start` / `ui` / `draft` / `done` / `error`）改動時，這三處必須一起改：
+- 事件型別（`text_delta` / `tool_start` / `ui` / `draft` / `done` / `error`）**或 `draft` 事件的欄位**改動時，這三處必須一起改：
   `agent_service/.../schemas.py`、`ai-butler-app/lib/data/remote/http_butler_ai_service.dart`、
-  `flutter_ai_script/lib/agent/agent_event.dart`。
+  `ai-butler-app/lib/domain/services/butler_ai_service.dart`（`ButlerChunk` 子型別）。
+  `ButlerChunk` 是 sealed class，漏改的話 `butler_chat_screen.dart` 的 switch 會編譯失敗 —— 這是好事，讓漏改變成編譯錯誤而不是執行時默默丟掉卡片。
+- **APP 端的草稿卡分兩種**：`feedback` 有表單可以帶使用者去填，映射成既有的 `PrefillCard`（點擊進 `/forms/{id}`）；`review`/`profile` 沒有表單，映射成 `DraftCard`（點擊分別進 `/orders`、`/account`）。不認得的 `kind` 一律走 `DraftCard` 而不是丟掉，使用者至少看得到摘要。
+- **導覽功能（「帶我操作一遍」）還沒做**，`flutter_ai_script/lib/agent/` 有參考實作待併入。開工前先知道這些落差：
+  1. `ai-butler-app` 的 `pubspec.yaml` **沒有** `tutorial_coach_mark`，要先加
+  2. 草稿卡目前只是 `context.push` 到某個畫面，**還沒有「直接送出 / 帶我操作」的兩顆按鈕分叉**（參考 `draft_action_card.dart`）
+  3. `tour.dart` 的 `tourBlueprints` 路由寫的是 `/reservation/new` / `/laundry/new`，那是舊原型的路徑；`ai-butler-app` 實際只有 `/forms/{formId}` 一個通用填單頁，藍圖要改成對應題目而不是對應畫面
+  4. 導覽要靠 `GlobalKey` 錨點抓到真實 widget，但 `ai-butler-app` 目前的 `GlobalKey` 只有表單驗證與 router 在用，錨點註冊要從頭加到 `topic_widgets.dart` 那些題型元件上
+  5. 預填由表單頁自己在 `initState` 讀 `prefill` 完成，導覽只負責解說 —— 不要讓導覽逐欄位寫值，使用者中途改的值會被覆蓋回去
 - **bff_server 是原樣轉發 SSE，不重新組裝**。agent 端已經是 `data: {...}\n\n` 格式，重組只會讓兩邊協定不同步。
 - **前端切 SSE 不能靠 chunk 邊界**。TCP 會任意切割位元組，`http_butler_ai_service.dart` 的 `_sseLines` 用緩衝區累積到換行才算一行；把每個 chunk 當一筆事件會隨機解析失敗。
 - AI 管家的 `receiveTimeout` 要放寬到分鐘級（目前 3 分鐘）。`ApiClient` 預設 20 秒，但模型思考加多次 tool 往返很容易超過，所以那支 service 用自己的 Dio 實例。
 - `app/AiButler/` 內部是**平坦 import**（`from config import ...`），因為 codeLocation 目錄本身就是 package 根。不要寫成 `from app.config import ...`。
 - 本機開發時 `BFF_BASE_URL` 留空就走 `backend.py` 的內建假資料，不需要等後端就緒。**部署時務必確認 `agentcore.json` 的 `BFF_BASE_URL` 有值** —— 留空的話 agent 會安靜地回假資料（`鳥花枝居酒屋`／`初魚鐵板燒`／vendor id 101/102），看起來一切正常但完全沒碰 DB。假資料的 topic_id 是 1~5 與 11~14，真實資料是三位數，用這個可以快速判斷。
 - **表單是掛在服務項目上，不是商家上**。`get_service_form` 收 `service_id` 而非 `vendor_id`，走 `cms_homepage_service.form_id`。`find_service_vendors` 回傳的每個服務項目帶 `has_form`，讓模型先知道哪些能線上填單，不會挑了之後才撞牆。
+- **測 agent 之前先確認種子資料狀態**。實測踩過兩次：(1) 所有 `cms_homepage_service.form_id` 都是 `NULL` 時，填單流程整條走不通，`get_service_form` 一律回「尚未設定對應表單」—— 這是資料問題不是程式 bug；(2) `GET /app-api/services/{id}/reviews` 對某些 service_id 會回 404「服務項目不存在」，`backend.py` 已把 404 當成「沒有評價」處理，避免整個 tool 掛掉。種子資料會被隊友重建，service_id 與 form_id 都可能變，不要把它們寫進測試或文件。
 
 ## 已知限制（上線前必須處理，demo 階段暫緩）
 
