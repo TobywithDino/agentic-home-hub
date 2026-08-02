@@ -79,7 +79,10 @@ class _ButlerChatScreenState extends ConsumerState<ButlerChatScreen> {
               botMessage.isStreaming = false;
               botMessage.isFailed = true;
               botMessage.text = m.isNotEmpty ? m : '回應失敗，請重試';
-            case CategoryCard() || VendorCard() || PrefillCard():
+            case CategoryCard() ||
+                  VendorCard() ||
+                  PrefillCard() ||
+                  DraftCard():
               botMessage.cards = [...botMessage.cards, chunk];
           }
         });
@@ -171,6 +174,10 @@ class _ButlerChatScreenState extends ConsumerState<ButlerChatScreen> {
         context.push(Routes.vendorDetail(id));
       case PrefillCard(formId: final id):
         context.push(Routes.form(id));
+      // 管家沒有寫入權限，草稿要由使用者自己在 GUI 上送出，
+      // 所以這裡只負責把他帶到能完成這件事的畫面。
+      case DraftCard(kind: final kind):
+        context.push(kind == 'profile' ? Routes.account : Routes.orders);
       default:
         break;
     }
@@ -342,6 +349,13 @@ class _CardWidget extends StatelessWidget {
           d
         ),
       PrefillCard(summary: final s) => (Icons.edit_note_outlined, '表單已預填', s),
+      DraftCard(kind: final k, kindLabel: final l, summary: final s) => (
+          k == 'profile'
+              ? Icons.person_outline
+              : Icons.rate_review_outlined,
+          '$l・請確認',
+          s
+        ),
       _ => (Icons.info_outlined, '資訊', ''),
     };
 

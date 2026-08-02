@@ -194,25 +194,7 @@ class HttpButlerAiService implements ButlerAiService {
         return _mapUiComponent(event);
 
       case 'draft':
-        final payload =
-            (event['payload'] as Map?)?.cast<String, dynamic>() ?? const {};
-        final content =
-            (payload['feedback_content'] as Map?)?.cast<String, dynamic>() ??
-                const {};
-        final formId = _asInt(event['form_id']) ?? _asInt(payload['form_id']);
-        final serviceId =
-            _asInt(event['service_id']) ?? _asInt(payload['service_id']);
-        if (formId == null || serviceId == null) return const <ButlerChunk>[];
-        return <ButlerChunk>[
-          PrefillCard(
-            serviceId: serviceId,
-            formId: formId,
-            filledCount: content.length,
-            // agent 端已驗證必填題都齊了才會產生草稿，所以這裡是 0。
-            remainingRequired: 0,
-            summary: event['summary'] as String? ?? '已為你整理好表單內容',
-          ),
-        ];
+        return _mapDraft(event);
 
       case 'done':
         return const <ButlerChunk>[Done()];
@@ -226,6 +208,69 @@ class HttpButlerAiService implements ButlerAiService {
       default:
         return const <ButlerChunk>[];
     }
+  }
+
+  /// draft 事件 → 對應的確認卡。
+  ///
+  /// agent 有三種草稿（schemas.py 的 DraftKind）：
+  ///   feedback → 諮詢單，有表單可以帶使用者去填，映射成 PrefillCard
+  ///   review   → 訂單評價
+  ///   profile  → 個人資料
+  /// 後兩者沒有表單，映射成通用的 DraftCard。
+  ///
+  /// 不認得的 kind 一律走 DraftCard 而不是丟掉：agent 之後新增草稿類型時，
+  /// 使用者至少還看得到摘要，不會整張卡片人間蒸發。
+  Iterable<ButlerChunk> _mapDraft(Map<String, dynamic> event) {
+    final payload =
+        (event['payload'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final kind = event['kind'] as String? ?? 'feedback';
+
+    if (kind == 'feedback') {
+      final content =
+          (payload['feedback_content'] as Map?)?.cast<String, dynamic>() ??
+              const {};
+      final formId = _asInt(event['form_id']) ?? _asInt(payload['form_id']);
+      final serviceId =
+          _asInt(event['service_id']) ?? _asInt(payload['service_id']);
+      if (formId == null || serviceId == null) {
+        if (kDebugMode) {
+          debugPrint('[butler] feedback 草稿缺 form_id/service_id，已忽略');
+        }
+        return const <ButlerChunk>[];
+      }
+      return <ButlerChunk>[
+        PrefillCard(
+          serviceId: serviceId,
+          formId: formId,
+          filledCount: content.length,
+          // agent 端已驗證必填題都齊了才會產生草稿，所以這裡是 0。
+          remainingRequired: 0,
+          summary: event['summary'] as String? ?? '已為你整理好表單內容',
+        ),
+      ];
+    }
+
+    final draftId = event['draft_id'] as String?;
+    final submit = (event['submit'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final path = submit['path'] as String?;
+    if (draftId == null || path == null) {
+      if (kDebugMode) {
+        debugPrint('[butler] $kind 草稿缺 draft_id/submit.path，已忽略');
+      }
+      return const <ButlerChunk>[];
+    }
+
+    return <ButlerChunk>[
+      DraftCard(
+        draftId: draftId,
+        kind: kind,
+        kindLabel: event['kind_label'] as String? ?? '待確認內容',
+        summary: event['summary'] as String? ?? '',
+        submitMethod: submit['method'] as String? ?? 'POST',
+        submitPath: path,
+        payload: payload,
+      ),
+    ];
   }
 
   Iterable<ButlerChunk> _mapUiComponent(Map<String, dynamic> event) {

@@ -60,15 +60,36 @@ class TourBlueprint {
   /// 要導航到哪個表單頁。
   final String route;
 
-  /// 依草稿內容產生步驟。payload 就是後端 propose_order 存下來的 body。
+  /// 依草稿內容產生步驟。payload 就是後端 propose_submission 存下來的 body。
   final List<TourStep> Function(Map<String, dynamic> payload) buildSteps;
 }
 
-/// 服務種類 → 導覽藍圖。
+/// 從草稿 payload 撈出某一題的答案。
 ///
-/// key 必須跟後端 `ServiceType` 的值一致。新增服務時兩邊一起加。
+/// 真實的 `feedback_content` 是 `{ "<topic_id>": {"title": ..., "value": ...} }`,
+/// topic_id 是每張表單自己的流水號,不能寫死在前端。所以這裡用題目標題的
+/// 關鍵字去找 —— 導覽文案只是解說用,找不到就回空字串,不要讓導覽掛掉。
+String answerOf(Map<String, dynamic> payload, String titleContains) {
+  final content = payload['feedback_content'];
+  if (content is! Map) return '';
+  for (final entry in content.values) {
+    if (entry is! Map) continue;
+    final title = entry['title']?.toString() ?? '';
+    if (title.contains(titleContains)) return entry['value']?.toString() ?? '';
+  }
+  return '';
+}
+
+/// 服務類型代碼 → 導覽藍圖。
+///
+/// key 必須跟後端 `ServiceType` 的值一致（`cms_homepage_service.type`）：
+/// 1=居家清潔 2=家電清洗 3=包裹寄送 6=餐廳訂位 9=美食外送 10=水電修繕 11=商城購物。
+/// 新增服務時兩邊一起加。
+///
+/// 只有 `kind=feedback`（諮詢單）的草稿走導覽；評價與個人資料草稿沒有表單頁,
+/// 不需要藍圖。
 final Map<String, TourBlueprint> tourBlueprints = {
-  'restaurant_reservation': TourBlueprint(
+  '6': TourBlueprint(
     route: '/reservation/new',
     buildSteps: (payload) => [
       const TourStep(
@@ -78,16 +99,16 @@ final Map<String, TourBlueprint> tourBlueprints = {
       ),
       TourStep(
         anchorId: 'reservation.date',
-        instruction: '日期選在 ${payload['date'] ?? ''},點一下可以改。',
+        instruction: '日期選在 ${answerOf(payload, '日期')},點一下可以改。',
       ),
       TourStep(
         anchorId: 'reservation.time',
-        instruction: '時段是 ${payload['time'] ?? ''}。'
+        instruction: '時段是 ${answerOf(payload, '時段')}。'
             '這裡只會列出還有位子的時間,所以選不到就是滿了。',
       ),
       TourStep(
         anchorId: 'reservation.partySize',
-        instruction: '人數 ${payload['party_size'] ?? ''} 位。',
+        instruction: '人數 ${answerOf(payload, '人數')} 位。',
       ),
       const TourStep(
         anchorId: 'reservation.contact',
@@ -101,7 +122,7 @@ final Map<String, TourBlueprint> tourBlueprints = {
     ],
   ),
 
-  'laundry_booking': TourBlueprint(
+  '2': TourBlueprint(
     route: '/laundry/new',
     buildSteps: (payload) => [
       const TourStep(
@@ -110,7 +131,7 @@ final Map<String, TourBlueprint> tourBlueprints = {
       ),
       TourStep(
         anchorId: 'laundry.slot',
-        instruction: '預約時段 ${payload['time'] ?? ''}。',
+        instruction: '預約時段 ${answerOf(payload, '日期')}。',
       ),
       const TourStep(
         anchorId: 'laundry.submit',
@@ -137,9 +158,13 @@ class TourLaunchArgs {
   final Map<String, dynamic> prefill;
   final List<TourStep> steps;
 
-  /// 從草稿事件組出啟動參數。回傳 null 表示這個服務還沒寫導覽藍圖。
+  /// 從草稿事件組出啟動參數。
+  ///
+  /// 回傳 null 表示不走導覽：可能是這個服務類型還沒寫藍圖,
+  /// 也可能這張草稿不是諮詢單（評價/個資沒有表單頁可導覽）。
   static ({String route, TourLaunchArgs args})? from(OrderDraftEvent draft) {
-    final blueprint = tourBlueprints[draft.service];
+    if (draft.kind != 'feedback') return null;
+    final blueprint = tourBlueprints[draft.serviceType];
     if (blueprint == null) return null;
 
     return (
