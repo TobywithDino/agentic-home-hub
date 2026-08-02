@@ -20,8 +20,9 @@ COMMENT ON COLUMN public.cms_homepage_service_vendor.description IS '服務商�
 
 -- DROP TABLE cms_homepage_service;
 
-CREATE TABLE cms_homepage_service ( id int4 NOT NULL, service_vendor_id int4 NOT NULL, "type" varchar(2) NOT NULL, "name" varchar(100) NOT NULL, img_url varchar(500) NULL, description text NULL, CONSTRAINT cms_homepage_service_pkey PRIMARY KEY (id));
+CREATE TABLE cms_homepage_service ( id int4 NOT NULL, service_vendor_id int4 NOT NULL, "type" varchar(2) NOT NULL, "name" varchar(100) NOT NULL, img_url varchar(500) NULL, description text NULL, form_id int4 NULL, CONSTRAINT cms_homepage_service_pkey PRIMARY KEY (id));
 CREATE INDEX idx_cms_homepage_service_vendor_id ON public.cms_homepage_service USING btree (service_vendor_id);
+CREATE INDEX idx_cms_homepage_service_form_id ON public.cms_homepage_service USING btree (form_id);
 COMMENT ON TABLE public.cms_homepage_service IS '首頁服務項目主檔';
 
 -- Column comments
@@ -32,3 +33,4 @@ COMMENT ON COLUMN public.cms_homepage_service."type" IS '服務類型代碼:1一
 COMMENT ON COLUMN public.cms_homepage_service."name" IS '服務項目名稱';
 COMMENT ON COLUMN public.cms_homepage_service.img_url IS '服務項目圖片網址';
 COMMENT ON COLUMN public.cms_homepage_service.description IS '服務項目說明(可含HTML)';
+COMMENT ON COLUMN public.cms_homepage_service.form_id IS '此服務項目對應的諮詢表單ID(對應pms_form.id,可為NULL代表尚未設定專屬表單)。一個表單可被多個服務項目共用；若該服務商還有B端/客服/轉訂單流程等通用表單，與此欄位無關，那些表單仍透過pms_form.service_vendor_id + GET /vendors/{id}/forms查詢。';

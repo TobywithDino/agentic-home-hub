@@ -19,7 +19,25 @@ class DbApiClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    @staticmethod
+    def _drop_none_params(kwargs: dict) -> dict:
+        """把 params 裡值為 None 的 key 移除。
+
+        httpx 會把 `{"type": None}` 序列化成 `type=`（空字串），而 api_server
+        收到空字串會當成「篩選 type 等於空字串」→ 回 0 筆。
+        實際踩到的案例：`GET /forms?service_vendor_id=1` 有 14 筆，
+        但多帶一個空的 `type=` 就變 0 筆，導致商家後台表單清單是空的。
+
+        router 用 `type: str | None = None` 這種可選 query 參數是慣例寫法，
+        所以在 client 這層統一濾掉，比要求每個 router 自己記得處理更可靠。
+        """
+        params = kwargs.get("params")
+        if isinstance(params, dict):
+            kwargs = {**kwargs, "params": {k: v for k, v in params.items() if v is not None}}
+        return kwargs
+
     async def request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        kwargs = self._drop_none_params(kwargs)
         try:
             resp = await self._client.request(method, path, **kwargs)
         except httpx.RequestError as exc:
@@ -36,8 +54,60 @@ class DbApiClient:
     async def get(self, path: str, **kwargs) -> httpx.Response:
         return await self.request("GET", path, **kwargs)
 
+    async def get_all_items(
+        self, path: str, params: dict | None = None, page_size: int = 200
+    ) -> list:
+        """依 api_server 的 PagedResponse 格式（total/limit/offset/items）
+        自動迴圈抓取全部分頁，回傳合併後的完整清單。
+
+        給需要「一次拿到全部資料」的場景用（例如提供給 AI/Lambda 做整批
+        分析），避免呼叫端還要自己處理 limit/offset 分頁迴圈。
+        """
+        items: list = []
+        offset = 0
+        query = dict(params or {})
+        query["limit"] = page_size
+
+        while True:
+            query["offset"] = offset
+            resp = await self.get(path, params=query)
+            data = resp.json()
+            page_items = data["items"]
+            items.extend(page_items)
+
+            offset += page_size
+            if not page_items or offset >= data["total"]:
+                break
+
+        return items
+
+    async def get_optional(self, path: str, **kwargs) -> httpx.Response | None:
+        """GET 但把 404 當作「此資源不存在」而非錯誤，回傳 None。
+
+        用於 1:0..1 的可選關聯，例如訂單評價（一筆訂單至多一筆評價，
+        沒評價時 api_server 回 404 是正常狀態，不該讓整支 BFF API 因此失敗）。
+        """
+        kwargs = self._drop_none_params(kwargs)
+        try:
+            resp = await self._client.get(path, **kwargs)
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail=f"呼叫 DB API 失敗: {exc}") from exc
+
+        if resp.status_code == 404:
+            return None
+        if resp.status_code >= 400:
+            try:
+                detail = resp.json().get("detail", resp.text)
+            except ValueError:
+                detail = resp.text
+            raise HTTPException(status_code=resp.status_code, detail=detail)
+        return resp
+
     async def post(self, path: str, **kwargs) -> httpx.Response:
         return await self.request("POST", path, **kwargs)
+
+    async def put(self, path: str, **kwargs) -> httpx.Response:
+        return await self.request("PUT", path, **kwargs)
 
     async def patch(self, path: str, **kwargs) -> httpx.Response:
         return await self.request("PATCH", path, **kwargs)

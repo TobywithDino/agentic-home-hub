@@ -1,0 +1,423 @@
+erDiagram
+    %% 智慧社區服務需求理解與媒合平台 — 資料庫結構圖（Mermaid erDiagram版）
+    %% 與schema.dbml內容對應（同樣18張表/關聯語意），改用crow's foot幾何符號表示基數，
+    %% 取代dbml-renderer用小字級數字標籤表示基數、整圖縮小後難以辨識的問題。
+    %% 資料庫本身「沒有」實體FOREIGN KEY約束（見README.md），下方關聯線是依
+    %% README.md記載的「值相等」關聯手動補上的，不代表資料庫實際存在約束。
+    %% 產圖：npx @mermaid-js/mermaid-cli -i schema.mmd -o schema_mermaid.svg
+    %% 也可直接貼進支援Mermaid的Markdown檢視器（GitHub/Kiro等）原生渲染。
+    %% 改資料庫結構時請同步更新本檔案（比照project-overview.md的steering自我維護規則）。
+    %% ------------------------------------------------------------------------
+    %% A. 縣市/行政區（縣市區域檔.sql）
+    %% ------------------------------------------------------------------------
+    sys_county {
+        string code PK "縣市代碼"
+        string name
+        int sort
+        string is_deleted "0正常1刪除"
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+    }
+
+    sys_district {
+        string code PK "行政區代碼"
+        string county_code FK
+        string name
+        string name_with_county
+        string zip
+        int sort
+        string is_deleted
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+    }
+
+    sys_district }|--|| sys_county : "county_code -> code"
+
+    %% ------------------------------------------------------------------------
+    %% B. 服務商 / 服務項目主檔（cms_homepage_service.sql）
+    %% ------------------------------------------------------------------------
+    cms_homepage_service_vendor {
+        int id PK "服務商ID,手動指定"
+        string name
+        string description
+    }
+
+    cms_homepage_service {
+        int id PK "服務項目ID,手動指定"
+        int service_vendor_id FK
+        string type "1清潔2家電3寄送6訂位9外送10水電11商城"
+        string name
+        string img_url
+        string description
+        int form_id FK "nullable,可多service共用同一表單"
+    }
+
+    cms_homepage_service }|--|| cms_homepage_service_vendor : "service_vendor_id -> id"
+    cms_homepage_service }o--o| pms_form : "form_id -> id (可選)"
+
+    %% ------------------------------------------------------------------------
+    %% C. 標籤與帳號（account_and_label.sql）
+    %% ------------------------------------------------------------------------
+    label {
+        int id PK
+        string name
+        int sort
+        string is_enable
+        string is_deleted
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+        string service_type "NULL=通用標籤,有值=該類型專屬"
+    }
+
+    service_label {
+        int service_id PK,FK
+        int label_id PK,FK
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+    }
+
+    service_label }|--|| cms_homepage_service : "service_id -> id"
+    service_label }|--|| label : "label_id -> id"
+
+    vendor_accounts {
+        uuid id PK
+        int service_vendor_id FK
+        string account UK
+        string password_hash "bcrypt雜湊"
+        bytea contact_name "AES-256-GCM加密"
+        string contact_name_hash
+        bytea contact_mobile "AES-256-GCM加密"
+        string contact_mobile_hash
+        bytea contact_email "AES-256-GCM加密"
+        string contact_email_hash
+        string is_2fa_enabled
+        string totp_secret
+        timestamp last_login_time
+        string is_enable
+        string is_deleted
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+    }
+
+    vendor_accounts }|--|| cms_homepage_service_vendor : "service_vendor_id -> id"
+
+    user_accounts {
+        uuid id PK "即inbr_account_id"
+        string account UK
+        string password_hash
+        bytea contact_name "AES-256-GCM加密"
+        string contact_name_hash
+        bytea contact_mobile "AES-256-GCM加密"
+        string contact_mobile_hash
+        bytea contact_email "AES-256-GCM加密"
+        string contact_email_hash
+        string is_2fa_enabled
+        string totp_secret
+        timestamp last_login_time
+        string is_enable
+        string is_deleted
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+    }
+
+    %% ------------------------------------------------------------------------
+    %% F. 表單結構（諮詢單相關table.sql）
+    %% ------------------------------------------------------------------------
+    pms_form {
+        int id PK
+        int service_vendor_id FK
+        string type "1C端無評估2C端需評估3B端4轉訂單5客服"
+        string sub_type "1一般表單2估價表單"
+        string name
+        text intro_content
+        text notice_content
+        text terms_content
+        string review_status "0未審核1已審核"
+        uuid reviewed_id
+        timestamp reviewed_time
+        string is_enable
+        string is_deleted
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+        jsonb feature
+    }
+
+    pms_form }|--|| cms_homepage_service_vendor : "service_vendor_id -> id"
+
+    pms_form_group {
+        int id PK
+        int form_id FK
+        string name
+        int sort
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+        jsonb feature
+    }
+
+    pms_form_group }|--|| pms_form : "form_id -> id"
+
+    pms_form_topic {
+        int id PK
+        int form_id FK
+        int form_group_id FK
+        string type "1簡答2詳答3單選4複選5地區選單6照片7備註8聯絡資料9日期10聯絡資料不含地址"
+        string title
+        string remark
+        string is_required
+        int sort
+        string is_number_only
+        int minimum_medias_upload
+        int maximum_medias_upload
+        int specified_medias_upload
+        int start_date_offset_days
+        int end_date_offset_days
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+        jsonb feature
+    }
+
+    pms_form_topic }|--|| pms_form : "form_id -> id"
+    pms_form_topic }|--|| pms_form_group : "form_group_id -> id"
+
+    pms_topic_media {
+        int id PK
+        int form_id FK
+        int topic_id FK
+        text img_url
+        int sort
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+    }
+
+    pms_topic_media }|--|| pms_form : "form_id -> id"
+    pms_topic_media }|--|| pms_form_topic : "topic_id -> id (種子資料topic_id=108為孤兒資料)"
+
+    pms_topic_option {
+        int id PK
+        int form_id FK
+        int topic_id FK
+        string option_name
+        int unit_price
+        string unit
+        string is_quantity
+        int min_quantity
+        int max_quantity
+        string is_quoted_separately
+        string remark
+        int sort
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+        jsonb feature
+    }
+
+    pms_topic_option }|--|| pms_form : "form_id -> id"
+    pms_topic_option }|--|| pms_form_topic : "topic_id -> id"
+
+    pms_topic_county_district_relation {
+        int form_id PK,FK
+        int topic_id PK,FK
+        timestamp eff_ts_from PK
+        timestamp eff_ts_to
+        string county_code PK,FK
+        string district_code PK,FK
+        timestamp upd_time
+        timestamp cre_time
+        uuid upd_id
+        uuid cre_id
+    }
+
+    pms_topic_county_district_relation }|--|| pms_form : "form_id -> id"
+    pms_topic_county_district_relation }|--|| pms_form_topic : "topic_id -> id"
+    pms_topic_county_district_relation }|--|| sys_county : "county_code -> code"
+    pms_topic_county_district_relation }|--|| sys_district : "district_code -> code"
+
+    pms_form_feedback {
+        string feedback_no PK "回饋單號"
+        int service_id FK
+        string platform_code "01=OP APP"
+        int form_id FK
+        jsonb feedback_content
+        string form_type
+        string is_read
+        string status
+        bytea contact_name "AES-256-GCM加密"
+        string contact_name_hash
+        bytea contact_mobile "AES-256-GCM加密"
+        string contact_mobile_hash
+        bytea contact_landline "AES-256-GCM加密"
+        string contact_landline_hash
+        bytea contact_email "AES-256-GCM加密"
+        string contact_email_hash
+        string preferred_contact_time "1上午2下午3皆可"
+        string contact_address_county FK
+        string contact_address_district FK
+        bytea contact_address_detail "AES-256-GCM加密"
+        string contact_address_detail_hash
+        string description
+        uuid inbr_account_id FK
+        timestamp cre_time
+        uuid upd_id
+        timestamp upd_time
+    }
+
+    pms_form_feedback }|--|| cms_homepage_service : "service_id -> id"
+    pms_form_feedback }|--|| pms_form : "form_id -> id"
+    pms_form_feedback }|--|| user_accounts : "inbr_account_id -> id"
+    pms_form_feedback }o--o| sys_county : "contact_address_county -> code (可選)"
+    pms_form_feedback }o--o| sys_district : "contact_address_district -> code (可選)"
+
+    %% ------------------------------------------------------------------------
+    %% G. 訂單（mms_order_record.sql）
+    %% ------------------------------------------------------------------------
+    mms_order_record {
+        bigint record_id PK
+        string order_no UK
+        int service_vendor_id FK
+        int service_id UK,FK
+        string platform_code
+        uuid inbr_account_id FK
+        bytea member_name "AES-256-GCM加密"
+        string member_name_hash
+        bytea member_phone "AES-256-GCM加密"
+        string member_phone_hash
+        bytea member_email "AES-256-GCM加密"
+        string member_email_hash
+        string order_type "01服務02訂位03預約04其他05商品06訂餐"
+        string order_status
+        timestamp order_time
+        timestamp deposit_time
+        timestamp confirm_time
+        timestamp service_time
+        timestamp complete_time
+        timestamp cancel_time
+        numeric deposit_amount
+        numeric original_amount
+        numeric discount_amount
+        numeric shipping_fee_amount
+        numeric final_amount
+        numeric refund_amount
+        numeric order_points
+        numeric used_points
+        numeric refund_points
+        numeric earn_points
+        string point_status
+        timestamp point_grant_time
+        jsonb vendor_data
+        jsonb order_items
+        text remark
+        text cancel_reason
+        text refund_reason
+        string source_file
+        string import_batch
+        uuid quote_approved_by
+        timestamp quote_approved_time
+        string quote_no
+        string comment_status "00無須評價01未評價02已評價"
+        boolean is_deleted
+        uuid cre_id
+        timestamp cre_time
+        uuid upd_id
+        timestamp upd_time
+    }
+
+    mms_order_record }|--|| cms_homepage_service_vendor : "service_vendor_id -> id"
+    mms_order_record }|--|| cms_homepage_service : "service_id -> id"
+    mms_order_record }|--|| user_accounts : "inbr_account_id -> id (下單會員)"
+
+    %% ------------------------------------------------------------------------
+    %% H. 訂單評價（mms_order_review.sql，新增功能）
+    %% ------------------------------------------------------------------------
+    mms_order_review {
+        bigint record_id PK "直接沿用mms_order_record.record_id,無獨立序列"
+        string order_no "冗餘欄位"
+        int service_vendor_id FK "冗餘欄位"
+        int service_id FK "冗餘欄位"
+        uuid inbr_account_id FK
+        int overall_rating "1~5星"
+        jsonb rating_detail
+        text review_content
+        jsonb media
+        string status "01已送出02已隱藏"
+        boolean is_deleted
+        uuid cre_id
+        timestamp cre_time
+        uuid upd_id
+        timestamp upd_time
+    }
+
+    mms_order_record ||--o| mms_order_review : "record_id -> record_id (PK共用值,至多一筆評價)"
+    mms_order_review }|--|| cms_homepage_service_vendor : "service_vendor_id -> id"
+    mms_order_review }|--|| cms_homepage_service : "service_id -> id"
+    mms_order_review }|--|| user_accounts : "inbr_account_id -> id (評價者)"
+
+    %% ------------------------------------------------------------------------
+    %% I. 評價AI摘要（mms_review_summary.sql，新增功能，目前無種子資料）
+    %% ------------------------------------------------------------------------
+    mms_review_summary_service {
+        int service_id PK "與cms_homepage_service.id共用值"
+        int service_vendor_id FK "冗餘欄位"
+        string service_name "名稱快取"
+        text summary_content
+        jsonb summary_highlights
+        jsonb sentiment_stats
+        int source_review_count
+        numeric source_avg_rating
+        timestamp latest_review_cre_time "判斷is_stale用"
+        string ai_model
+        string generate_status "00待生成01生成中02已完成03失敗"
+        timestamp generate_time
+        text error_message
+        boolean is_deleted
+        uuid cre_id
+        timestamp cre_time
+        uuid upd_id
+        timestamp upd_time
+    }
+
+    cms_homepage_service ||--o| mms_review_summary_service : "service_id -> id (PK共用值,覆寫式快取)"
+    mms_review_summary_service }|--|| cms_homepage_service_vendor : "service_vendor_id -> id"
+
+    mms_review_summary_vendor {
+        int service_vendor_id PK "與cms_homepage_service_vendor.id共用值"
+        string vendor_name "名稱快取"
+        text summary_content
+        jsonb summary_highlights
+        jsonb sentiment_stats
+        jsonb service_breakdown "各服務項目統計快取"
+        int source_review_count
+        numeric source_avg_rating
+        timestamp latest_review_cre_time
+        string ai_model
+        string generate_status
+        timestamp generate_time
+        text error_message
+        boolean is_deleted
+        uuid cre_id
+        timestamp cre_time
+        uuid upd_id
+        timestamp upd_time
+    }
+
+    cms_homepage_service_vendor ||--o| mms_review_summary_vendor : "service_vendor_id -> id (PK共用值,覆寫式快取)"

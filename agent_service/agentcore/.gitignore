@@ -1,0 +1,12 @@
+.env.local
+.cache/
+.cli/
+cdk/node_modules/
+cdk/cdk.out/
+
+# agentcore package 的建置產物
+*.zip
+
+# 含 AWS account id，不進版控（repo 會公開）。
+# 複製 aws-targets.example.json 改成 aws-targets.json 並填入自己的 account id。
+aws-targets.json

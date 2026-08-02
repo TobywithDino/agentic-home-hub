@@ -114,6 +114,7 @@ class ServiceCreate(BaseModel):
     name: str = Field(max_length=100)
     img_url: str | None = Field(default=None, max_length=500)
     description: str | None = None
+    form_id: int | None = None
 
 
 class ServiceUpdate(BaseModel):
@@ -122,6 +123,7 @@ class ServiceUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=100)
     img_url: str | None = Field(default=None, max_length=500)
     description: str | None = None
+    form_id: int | None = None
 
 
 class ServiceOut(BaseModel):
@@ -132,6 +134,7 @@ class ServiceOut(BaseModel):
     name: str
     img_url: str | None
     description: str | None
+    form_id: int | None
 
 
 # ---------------------------------------------------------------------------
@@ -141,12 +144,14 @@ class LabelCreate(BaseModel):
     name: str = Field(max_length=50)
     sort: int = 0
     is_enable: str = "1"
+    service_type: str | None = Field(default=None, max_length=2)
 
 
 class LabelUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=50)
     sort: int | None = None
     is_enable: str | None = None
+    service_type: str | None = Field(default=None, max_length=2)
 
 
 class LabelOut(BaseModel):
@@ -160,6 +165,7 @@ class LabelOut(BaseModel):
     cre_time: dt.datetime
     upd_id: uuid.UUID | None
     cre_id: uuid.UUID
+    service_type: str | None
 
 
 class ServiceLabelOut(BaseModel):
@@ -669,3 +675,155 @@ class OrderSummaryOut(BaseModel):
     """會員「查看訂單」拼接回應：未處理 feedback + orders"""
     feedbacks: list[FeedbackOut]
     orders: list[OrderOut]
+
+
+# ---------------------------------------------------------------------------
+# I. 訂單評價
+# ---------------------------------------------------------------------------
+class ReviewCreate(BaseModel):
+    inbr_account_id: uuid.UUID
+    overall_rating: int = Field(ge=1, le=5)
+    rating_detail: JsonValue | None = None
+    review_content: str | None = None
+    media: JsonValue | None = None
+
+
+class ReviewUpdate(BaseModel):
+    """評價者本人修改內容用。依現有架構(無身分驗證中介層)，由呼叫端於路由層
+    自行比對 inbr_account_id 是否與該筆評價一致，本 schema 僅負責欄位驗證。"""
+    overall_rating: int | None = Field(default=None, ge=1, le=5)
+    rating_detail: JsonValue | None = None
+    review_content: str | None = None
+    media: JsonValue | None = None
+
+
+class ReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    record_id: int
+    order_no: str
+    service_vendor_id: int
+    service_id: int
+    inbr_account_id: uuid.UUID
+    overall_rating: int
+    rating_detail: JsonValue | None
+    review_content: str | None
+    media: JsonValue | None
+    status: str
+    is_deleted: bool
+    cre_id: uuid.UUID
+    cre_time: dt.datetime
+    upd_id: uuid.UUID | None
+    upd_time: dt.datetime
+
+
+class PublicReviewOut(BaseModel):
+    """公開評價牆專用（GET /services/{service_id}/reviews，無需身分驗證即可呼叫）。
+    刻意排除 inbr_account_id/order_no/service_vendor_id/status/is_deleted 等
+    身分或內部狀態欄位，避免對外洩漏評價者身分或訂單資訊。"""
+    model_config = ConfigDict(from_attributes=True)
+    record_id: int
+    overall_rating: int
+    rating_detail: JsonValue | None
+    review_content: str | None
+    media: JsonValue | None
+    cre_time: dt.datetime
+
+
+class RatingSummaryOut(BaseModel):
+    service_vendor_id: int
+    service_id: int | None = None
+    review_count: int
+    average_rating: float | None
+
+
+# ---------------------------------------------------------------------------
+# I2. 評價AI摘要（新增功能）
+# ---------------------------------------------------------------------------
+class ReviewSummaryStatusUpdate(BaseModel):
+    """僅更新生成狀態用，讓生成流程可以「先標記生成中」再非同步寫入完整內容。
+    若目標 key 尚無記錄，路由層會自動建立一筆殼記錄（其餘欄位皆為 null）。"""
+    generate_status: str = Field(max_length=2)
+    error_message: str | None = None
+
+
+class ServiceReviewSummaryUpsert(BaseModel):
+    """完整覆寫語意：呼叫端（AI生成流程）應自行查詢當下最新的評價聚合值
+    （筆數/平均分/最新時間）連同生成結果一起送出。generate_time 由伺服器端填入。"""
+    service_vendor_id: int
+    service_name: str | None = Field(default=None, max_length=100)
+    summary_content: str | None = None
+    summary_highlights: JsonValue | None = None
+    sentiment_stats: JsonValue | None = None
+    source_review_count: int = 0
+    source_avg_rating: float | None = None
+    latest_review_cre_time: dt.datetime | None = None
+    ai_model: str | None = Field(default=None, max_length=50)
+    generate_status: str = Field(max_length=2)
+    error_message: str | None = None
+
+
+class ServiceReviewSummaryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    service_id: int
+    service_vendor_id: int
+    service_name: str | None
+    summary_content: str | None
+    summary_highlights: JsonValue | None
+    sentiment_stats: JsonValue | None
+    source_review_count: int
+    source_avg_rating: float | None
+    latest_review_cre_time: dt.datetime | None
+    ai_model: str | None
+    generate_status: str
+    generate_time: dt.datetime | None
+    error_message: str | None
+    is_deleted: bool
+    cre_id: uuid.UUID
+    cre_time: dt.datetime
+    upd_id: uuid.UUID | None
+    upd_time: dt.datetime
+    is_stale: bool = False
+    """計算欄位（非資料庫欄位）：即時比對 mms_order_review 目前的
+    COUNT(*)/MAX(cre_time) 是否超過本筆摘要記錄的 source_review_count/
+    latest_review_cre_time，True 代表有新評價尚未納入摘要，建議觸發重新生成。"""
+
+
+class VendorReviewSummaryUpsert(BaseModel):
+    """結構同 ServiceReviewSummaryUpsert，差異是無 service_vendor_id 冗餘欄位
+    （PK 本身即為 service_vendor_id），多一個 service_breakdown 統計快取。"""
+    vendor_name: str | None = Field(default=None, max_length=50)
+    summary_content: str | None = None
+    summary_highlights: JsonValue | None = None
+    sentiment_stats: JsonValue | None = None
+    service_breakdown: JsonValue | None = None
+    source_review_count: int = 0
+    source_avg_rating: float | None = None
+    latest_review_cre_time: dt.datetime | None = None
+    ai_model: str | None = Field(default=None, max_length=50)
+    generate_status: str = Field(max_length=2)
+    error_message: str | None = None
+
+
+class VendorReviewSummaryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    service_vendor_id: int
+    vendor_name: str | None
+    summary_content: str | None
+    summary_highlights: JsonValue | None
+    sentiment_stats: JsonValue | None
+    service_breakdown: JsonValue | None
+    source_review_count: int
+    source_avg_rating: float | None
+    latest_review_cre_time: dt.datetime | None
+    ai_model: str | None
+    generate_status: str
+    generate_time: dt.datetime | None
+    error_message: str | None
+    is_deleted: bool
+    cre_id: uuid.UUID
+    cre_time: dt.datetime
+    upd_id: uuid.UUID | None
+    upd_time: dt.datetime
+    is_stale: bool = False
+    """計算欄位（非資料庫欄位），語意同 ServiceReviewSummaryOut.is_stale，
+    但比對範圍是該供應商名下全部服務的 mms_order_review。"""

@@ -11,8 +11,12 @@
 3. [直接呼叫 API（不需要進 EC2）](#3-直接呼叫-api不需要進-ec2)
 4. [連進 EC2（用 SSM，不需要 SSH key）](#4-連進-ec2用-ssm不需要-ssh-key)
 5. [檢查 / 重啟 API service](#5-檢查--重啟-api-service)
+5.1. [補寫種子測試帳號的 PII 明文（`patch_test_pii.ps1`）](#51-補寫種子測試帳號的-pii-明文patch_test_piips1)
+5.2. [改了 `.env` 之後：同步備份到 SSM Parameter Store](#52-改了-env-之後同步備份到-ssm-parameter-store)
 6. [更新程式碼（重新部署新版本）](#6-更新程式碼重新部署新版本)
 7. [連線資料庫（RDS）](#7-連線資料庫rds)
+   - [7.1 從 EC2 內部連](#71-從-ec2-內部連先連進-ec2-再操作)
+   - [7.2 從本機直接用 GUI 工具連（推薦）](#72-從本機直接用-gui-工具連推薦不用先連進-ec2)
 8. [常見問題排解](#8-常見問題排解)
 9. [已知限制 / 安全提醒](#9-已知限制--安全提醒)
 
@@ -148,6 +152,75 @@ sudo systemctl restart aiwave-api
 cat /home/ssm-user/aiwave/api_server/.env
 ```
 
+## 5.1 補寫種子測試帳號的 PII 明文（`patch_test_pii.ps1`）
+
+**背景**：種子資料建置時 `PII_ENCRYPTION_KEY_B64` 是空的，所以 `user_accounts`/`vendor_accounts` 的
+`contact_name`/`contact_mobile`/`contact_email` 一律存 `NULL`（`_hash` 欄位不受影響，永遠有值）。
+設定好金鑰、重啟 `aiwave-api` 之後，**舊種子資料依然是 `NULL`**——加密金鑰只影響「金鑰設定之後」新寫入的資料，
+不會回頭補全歷史資料。`Database/patch_test_pii.ps1` 就是用來一次性補寫這 7 筆種子帳號（`user01`~`04`、
+`vendor01`~`03`）的測試用個資明文，讓demo時個人資料頁面有東西可以顯示。
+
+**前置條件**（缺一都會白做）：
+1. EC2 上 `/home/ssm-user/aiwave/api_server/.env` 的 `PII_ENCRYPTION_KEY_B64` 已設定非空值（見上方第5節如何連進 EC2 修改）
+2. 改完 `.env` 後已執行 `sudo systemctl restart aiwave-api` 讓新金鑰生效
+3. 本機能連上 `http://52.10.163.115:8000`（第3節的連線方式）
+
+若金鑰還沒設定就執行此腳本，PATCH 會回 200 成功，但 `contact_name` 等欄位仍會被 `encrypt_pii()` 短路寫成
+`NULL`，只有 `_hash` 欄位會被覆蓋更新，等於做了白工還順便弄髒 hash，記得先確認金鑰狀態再跑。
+
+**用法**（在本機 PowerShell，不需要連進 EC2）：
+
+```powershell
+powershell -File Database\patch_test_pii.ps1
+# 或指定不同的 api_server base url：
+powershell -File Database\patch_test_pii.ps1 -BaseUrl "http://52.10.163.115:8000"
+```
+
+腳本會依序對以下 7 個帳號呼叫 `PATCH /users/{id}` 或 `PATCH /vendors/{service_vendor_id}/accounts/{id}`，
+填入固定的測試用假資料（非真實個資，格式為「測試會員0X」/「測試商家聯絡人0X」+ 假手機號）：
+
+| 帳號 | 對應 API |
+|---|---|
+| user01~04@example.com | `PATCH /users/{inbr_account_id}` |
+| vendor01~03@example.com | `PATCH /vendors/{service_vendor_id}/accounts/{account_id}` |
+
+**驗證**：腳本執行後會印出每筆 PATCH 的回應，檢查 `contact_name` 欄位是否為明文（非 `null`）即可確認金鑰生效。
+若終端機顯示中文亂碼（PowerShell 主控台編碼問題，非資料損毀），改用 `curl.exe ... -o out.json` 存檔後
+用文字編輯器開啟確認即可。
+
+⚠️ 這是一次性補寫腳本，帳號 id 是寫死對應 `database/帳號與標籤範例資料.json` 裡的既有種子資料，重新
+`import_seed_data.py` 建置全新資料庫後 id 不會變，可以重複執行；但若之後種子資料內容有異動（新增/刪除帳號），
+腳本內容需要同步更新。
+
+## 5.2 改了 `.env` 之後：同步備份到 SSM Parameter Store
+
+**背景**：`api_server/.env`（`PG_PASSWORD`、`PII_ENCRYPTION_KEY_B64`）只存在 EC2 上這一份，從未進版控，也沒有其他備份。曾經真的被一次部署指令裡的 `rm -rf` 誤刪過，導致服務中斷、PII 加密金鑰遺失（事故經過見 `Database/鬼故事_誤刪env事件.md`）。事後把這兩個值額外備份一份到 **SSM Parameter Store**（`SecureString`，KMS 加密），萬一 `.env` 又被誤刪，可以直接讀回來，不用重設密碼、不用產生新金鑰、不用重跑 `patch_test_pii.ps1`。
+
+**這份備份不會自動跟 `.env` 同步**——每次手動改了 `.env`（改密碼、換金鑰）之後，**必須**手動執行下面這兩行，把備份更新成最新值，否則備份會過期，真正需要復原時反而拿到舊密碼：
+
+```powershell
+# 把 <新密碼> / <新金鑰> 換成剛才寫進 EC2 .env 的實際值
+aws ssm put-parameter --profile agentic-home-hub --region us-west-2 `
+  --name "/aiwave/api_server/PG_PASSWORD" --type SecureString --overwrite --value "<新密碼>"
+
+aws ssm put-parameter --profile agentic-home-hub --region us-west-2 `
+  --name "/aiwave/api_server/PII_ENCRYPTION_KEY_B64" --type SecureString --overwrite --value "<新金鑰>"
+```
+
+**復原時**（`.env` 不見了、但備份還在）：
+
+```powershell
+aws ssm get-parameter --profile agentic-home-hub --region us-west-2 `
+  --name "/aiwave/api_server/PG_PASSWORD" --with-decryption --query "Parameter.Value" --output text
+
+aws ssm get-parameter --profile agentic-home-hub --region us-west-2 `
+  --name "/aiwave/api_server/PII_ENCRYPTION_KEY_B64" --with-decryption --query "Parameter.Value" --output text
+```
+
+拿到值之後，照第5節「重啟 API service」段落的方式在 EC2 上重建 `.env`（`cat > .env << 'EOF' ... EOF`），再 `sudo systemctl restart aiwave-api`。
+
+⚠️ **這只是備份，不是自動化機制**。方案本身的風險（沒做同步就會過期、能讀這組 AWS 憑證的人等於能看到明文密碼）務必知悉，不要誤以為做了這件事之後 `.env` 就萬無一失——第6節那條「不要對整個目錄 `rm -rf`」的規則依然適用，這份備份只是多一條救援手段，不是拿來取代小心操作。
+
 ## 6. 更新程式碼（重新部署新版本）
 
 如果 git repo 有新的 commit，要同步到 EC2 上，流程是「打包 → 上傳 S3 → EC2 下載解壓 → 重啟 service」。**在自己電腦上執行**（不是在 EC2 裡）：
@@ -166,7 +239,11 @@ aws ssm send-command --profile agentic-home-hub --region us-west-2 --instance-id
 
 拿到 `CommandId` 後用第4.3節的方式查執行結果，看到 `"Status": "Success"` 且 `Active: active (running)` 就代表部署成功。
 
+> ⚠️ **絕對不要對 `api_server/`、`database/`、`bff_server/` 這幾個目錄本身執行 `rm -rf`（例如 `rm -rf api_server database` 想「先清乾淨再解壓」）**。`tar -xzf` 本身就會覆蓋同名檔案，完全不需要先清空目錄；`rm -rf` 整個目錄會連同**只存在 EC2 上、從未進版控、沒有任何備份**的 `api_server/.env`（含 RDS 密碼、PII 加密金鑰）一起刪掉，且刪掉後這些機密**救不回來**（PII 金鑰遺失後，舊加密資料永久解不開）。真正需要清的只有 `.pyc`/`__pycache__` 這類編譯快取，上面指令裡的 `rm -rf api_server/app/__pycache__ api_server/app/routers/__pycache__` 這兩行已經夠用，不要自己加更大範圍的清空指令。曾經真的手滑刪過一次，事故經過見 `Database/鬼故事_誤刪env事件.md`。
+
 ⚠️ 這個流程只更新 `database/` 和 `api_server/` 程式碼本身，**不會**重跑 `import_seed_data.py`（資料庫結構/種子資料不會被動到）。如果這次更新有改到 DDL 或需要跑資料庫遷移，要另外處理，不在這個腳本範圍內。
+
+⚠️ **如果這次部署過程中連帶重建或修改了 `.env`**（例如像鬼故事文件那次事故，密碼被重設過），部署完成、確認服務正常後，記得照第5.2節的方式把新值同步更新到 SSM Parameter Store 備份，否則備份會停留在舊值。單純更新程式碼、沒動 `.env` 的話，不需要做這件事。
 
 驗證更新後端點數量有沒有變化（目前應該是 78 個）：
 
@@ -177,7 +254,11 @@ $openapi = Invoke-RestMethod -Uri "http://52.10.163.115:8000/openapi.json"
 
 ## 7. 連線資料庫（RDS）
 
-RDS **沒有公開存取**，只能從 VPC 內部連（也就是從這台 EC2）。想直接用 psql 或其他工具查資料庫內容，先連進 EC2（第4節），再從裡面連：
+RDS **刻意設定為沒有公開存取**（`PubliclyAccessible: false`），這是為了避免帳密外流後資料庫被任意讀寫。有兩種方式可以查看/操作裡面的資料，都不需要修改 RDS 的公開存取設定：
+
+### 7.1 從 EC2 內部連（先連進 EC2 再操作）
+
+先連進 EC2（第4節），再從裡面連：
 
 ```bash
 source /home/ssm-user/aiwave/venv/bin/activate
@@ -193,6 +274,66 @@ print(cur.fetchone())
 或者裝 `postgresql` client 直接用 `psql`（AL2023 預設沒裝，需要 `sudo dnf install -y postgresql16`）。
 
 資料庫密碼存在 EC2 上的 `/home/ssm-user/aiwave/api_server/.env`（`PG_PASSWORD`），連進 EC2 後可以直接 `cat` 出來看，不會另外用聊天工具傳送這組密碼。
+
+### 7.2 從本機直接用 GUI 工具連（推薦，不用先連進 EC2）
+
+如果想用 DBeaver / pgAdmin / TablePlus 這類 GUI 工具直接瀏覽資料庫內容（比在終端機打SQL方便很多），可以透過 **SSM Port Forwarding** 在本機開一個通道，把本機某個埠轉發到 RDS，資料庫本身完全不需要改成公開存取，安全群組也不用動。
+
+**這個方法已經實測驗證過**：本機開通道後用 `psycopg2` 連線讀取 `mms_order_record`/`mms_order_review` 都正常。
+
+#### 步驟1：安裝 Session Manager Plugin（第一次使用需要，跟第4.1節是同一個東西）
+
+```powershell
+Invoke-WebRequest -Uri "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/windows/SessionManagerPluginSetup.exe" -OutFile "$env:TEMP\SessionManagerPluginSetup.exe"
+Start-Process -FilePath "$env:TEMP\SessionManagerPluginSetup.exe" -ArgumentList "/quiet" -Wait
+```
+
+裝完後**重新開一個終端機視窗**（讓新裝的 PATH 生效，不然 `aws` 指令會說找不到 plugin）。
+
+#### 步驟2：建立參數檔
+
+存成 `portfwd_params.json`（放哪都可以，指令裡路徑對應改）：
+
+```json
+{
+    "host": ["aiwave-db.c1m8oq4cswto.us-west-2.rds.amazonaws.com"],
+    "portNumber": ["5432"],
+    "localPortNumber": ["15432"]
+}
+```
+
+#### 步驟3：開通道
+
+```powershell
+aws ssm start-session --profile agentic-home-hub --region us-west-2 --target i-0a2d19c738be6cb09 --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters file://portfwd_params.json
+```
+
+看到這樣的輸出代表通道建立成功：
+
+```
+Starting session with SessionId: Participant-xxxxxxxxxxxxxxxxx
+Port 15432 opened for sessionId Participant-xxxxxxxxxxxxxxxxx.
+Waiting for connections...
+```
+
+**這個終端機視窗要保持開著**，通道只在這個process活著的時候有效，關掉視窗或Ctrl+C就斷線（要斷線就直接關視窗，沒有其他步驟）。
+
+#### 步驟4：用任何 PostgreSQL 工具連本機的轉發埠
+
+在 DBeaver / pgAdmin / psql 的連線設定填：
+
+| 欄位 | 值 |
+|---|---|
+| Host | `localhost` |
+| Port | `15432`（對應步驟2設定的 `localPortNumber`） |
+| Database | `aiwave` |
+| User | `postgres` |
+| Password | 跟保管憑證的人要（存在 EC2 的 `/home/ssm-user/aiwave/api_server/.env`） |
+| SSL mode | `require` |
+
+連上後看到的是 RDS 上即時、完整的資料，效果跟直接連公開端點一樣，但 RDS 本身從頭到尾沒有改過任何公開存取設定。
+
+> 一個人一次只需要一個通道，多人要同時查看的話，每個人各自在自己電腦上重複步驟1~4即可，不會互相干擾（每個 SSM session 是獨立的）。
 
 ## 8. 常見問題排解
 
@@ -216,6 +357,7 @@ print(cur.fetchone())
 - **8000 埠對整個網際網路開放**（`0.0.0.0/0`），沒有 HTTPS/TLS。
 - **CORS 允許所有來源**（`*`）。
 - **RDS 密碼明文放在 EC2 的 `.env` 檔案**，沒有用 AWS Secrets Manager。
+- **RDS 刻意維持不公開存取**：即使開發階段想讓隊友方便查看資料庫內容，也不建議把 RDS 改成 `PubliclyAccessible: true` 對外開放5432埠——一旦開放，任何拿到這組明文密碼的人就能直接連線讀寫整個資料庫，且公網上的自動化掃描器通常幾分鐘到幾小時內就會嘗試連線開放的資料庫埠。想讓隊友查看資料庫內容，請用第7.2節的 SSM Port Forwarding 方式，不需要更動RDS或安全群組的任何設定。
 - 這是 workshop 臨時帳號，所有資源都有可能被自動回收，重要資料/程式碼請以 git repo 為準，不要依賴這個環境長期存在。
 
 完整的部署原理與本機建置方式見 `Database/部署手冊.md`；API 端點規格見 `Database/API_Reference.md`。

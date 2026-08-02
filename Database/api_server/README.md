@@ -1,7 +1,7 @@
 # DB Access API Server
 
 供主要專案程式使用的資料庫存取 API，基於 FastAPI + uvicorn + SQLAlchemy，
-對接 `../database/` 建置的 PostgreSQL schema。共 77 個業務端點，完整規格（路徑/方法/
+對接 `../database/` 建置的 PostgreSQL schema。共 94 個業務端點，完整規格（路徑/方法/
 Request Body/回傳型別）見 `../API_Reference.md`。
 
 > 完整的「建資料庫 → 部署此 server → 上 AWS」步驟，請看根目錄的
@@ -39,6 +39,8 @@ app/
     forms.py      表單結構完整 CRUD
     feedbacks.py  諮詢單回饋
     orders.py     訂單（含查看訂單拼接邏輯）
+    reviews.py    訂單評價
+    summaries.py  評價AI摘要（讀取/寫入摘要結果，不呼叫LLM，生成流程由上層服務負責）
   main.py        FastAPI 應用程式入口
 ```
 
@@ -71,3 +73,10 @@ app/
 - 資料庫本身無實體 FOREIGN KEY 約束（鬆耦合設計），API 層也未做深度跨表
   存在性驗證（例如建立 feedback 時不會檢查 form_id 是否真實存在），這是延續
   既有 schema 設計慣例，非遺漏。
+- `summaries.py` 不呼叫 LLM，只負責讀取/寫入 `mms_review_summary_service`、
+  `mms_review_summary_vendor` 兩張覆寫式快取表。`PATCH .../status` 在記錄不
+  存在時會自動建立殼記錄；服務項目版本會查 `cms_homepage_service` 取得
+  `service_vendor_id`（若 `service_id` 不存在則回404），供應商版本則不驗證
+  `service_vendor_id` 是否存在於 `cms_homepage_service_vendor`。`is_stale`
+  為即時計算欄位，每次 `GET` 都會對 `mms_order_review` 多一次聚合查詢，demo
+  規模下無效能問題，若評價量變大可考慮改成生成流程自行維護。
