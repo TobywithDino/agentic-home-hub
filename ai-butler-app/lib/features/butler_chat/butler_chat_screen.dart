@@ -86,14 +86,7 @@ class _ButlerChatScreenState extends ConsumerState<ButlerChatScreen> {
                   VendorCard() ||
                   PrefillCard() ||
                   DraftCard():
-              // 同一張草稿卡在同一段對話裡只顯示一次。
-              //
-              // agent 端已經有防重複，但它的工作集存在 process 記憶體，
-              // AgentCore Runtime 實例被回收後就消失，那時模型會重新產生。
-              // 這裡再擋一層，讓使用者不會看到兩張一樣的卡片。
-              if (!_isDuplicateCard(chunk)) {
-                botMessage.cards = [...botMessage.cards, chunk];
-              }
+              _appendCard(botMessage, chunk);
           }
         });
         _scrollToBottom();
@@ -109,24 +102,48 @@ class _ButlerChatScreenState extends ConsumerState<ButlerChatScreen> {
     );
   }
 
-  /// 這張卡片在本段對話裡是否已經出現過。
+  /// 已經送出過的草稿指紋。送出後同一張卡就不該再出現。
+  final Set<String> _submittedSignatures = <String>{};
+
+  /// 把卡片放進訊息。
   ///
-  /// 只對草稿卡做（服務商卡重複出現是合理的 —— 使用者可能又問了一次同一類服務）。
-  /// 比對的是「內容」而不是 draft_id：agent 每次產生都是新的 draft_id，
-  /// 用 id 比對等於沒擋。
-  bool _isDuplicateCard(ButlerChunk card) {
+  /// 草稿卡需要處理三種情況（服務商/類別卡不用，重複出現是合理的 ——
+  /// 使用者可能又問了一次同一類服務）：
+  ///
+  /// 1. **已經送出過** → 完全不顯示。這是使用者要的行為：上面送出了，
+  ///    下面就不要再冒出同一張。
+  /// 2. **同一張已經在前面的訊息裡** → 把它**搬**到現在這則訊息，
+  ///    而不是丟掉新的。丟掉的話卡片會留在幾十行以上的地方，
+  ///    模型卻說「卡片在畫面上」，使用者等於看不到（實測踩過）。
+  ///    搬過來就永遠只有一張，而且一定在最相關的位置。
+  /// 3. 其他 → 直接加。
+  ///
+  /// agent 端也有防重複（會重送同一個 draft_id），兩邊搭配的結果是：
+  /// 卡片還在就搬位置，卡片不見了就重新顯示，都不會變成空白。
+  void _appendCard(_ChatMessage target, ButlerChunk card) {
     final signature = _cardSignature(card);
-    if (signature == null) return false;
+
+    if (signature == null) {
+      target.cards = <ButlerChunk>[...target.cards, card];
+      return;
+    }
+
+    if (_submittedSignatures.contains(signature)) return;
 
     for (final message in _messages) {
-      for (final existing in message.cards) {
-        if (_cardSignature(existing) == signature) return true;
-      }
+      final kept = message.cards
+          .where((c) => _cardSignature(c) != signature)
+          .toList(growable: false);
+      if (kept.length != message.cards.length) message.cards = kept;
     }
-    return false;
+
+    target.cards = <ButlerChunk>[...target.cards, card];
   }
 
   /// 草稿卡的內容指紋。非草稿卡回 null（不做去重）。
+  ///
+  /// 比對「內容」而不是 draft_id：agent 每次產生都是新的 draft_id，
+  /// 用 id 比對等於沒擋。
   static String? _cardSignature(ButlerChunk card) => switch (card) {
         PrefillCard(formId: final f, answers: final a) =>
           'feedback|$f|${(a.entries.map((e) => '${e.key}=${e.value}').toList()..sort()).join('|')}',
@@ -209,7 +226,26 @@ class _ButlerChatScreenState extends ConsumerState<ButlerChatScreen> {
   /// 全程都活著，是安全的發起點。
   Future<void> _openDraftSheet(PrefillCard card) async {
     final action = await showPrefillDraftSheet(context, card);
-    if (action != DraftSheetAction.guide || !mounted) return;
+    if (!mounted) return;
+
+    if (action == DraftSheetAction.submitted) {
+      // 送出後把卡片收掉並記下指紋：這張已經成立了，
+      // 之後 agent 重送同一張也不該再出現，更不該讓使用者再點一次。
+      final signature = _cardSignature(card);
+      if (signature != null) {
+        setState(() {
+          _submittedSignatures.add(signature);
+          for (final message in _messages) {
+            message.cards = message.cards
+                .where((c) => _cardSignature(c) != signature)
+                .toList(growable: false);
+          }
+        });
+      }
+      return;
+    }
+
+    if (action != DraftSheetAction.guide) return;
 
     tourLog('開始導覽：service_type=${card.serviceType} '
         'vendor_id=${card.vendorId} form_id=${card.formId}');

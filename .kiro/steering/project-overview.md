@@ -220,6 +220,10 @@ agentcore logs               # 看 runtime 日誌
 - **tool 覆蓋範圍對齊 APP GUI**：讀取類 `find_service_vendors` / `list_service_labels` / `show_vendor_list` / `list_vendor_services` / `get_service_form` / `get_service_reviews` / `get_my_profile` / `list_my_orders`；草稿類 `propose_submission`（諮詢單）/ `propose_review`（訂單評價）/ `propose_profile_update`（個人資料）。登入刻意不給 tool —— 身分由呼叫端注入的 `actor_id` 決定。
 - **回給模型的資料一律用白名單裁欄位**，不要用黑名單。真實訂單有 48 個欄位含 `member_name`/`member_phone` 與大量 `*_hash`，評價含 `inbr_account_id`/`order_no`。黑名單漏一個就把 PII 送進模型 context 與 CloudWatch log（`dispatch` 會 log tool 參數），白名單漏一個只是模型少看到一項資訊。見 `tools.py` 的 `_ORDER_KEEP_FIELDS` / `_FEEDBACK_KEEP_FIELDS` / `_REVIEW_KEEP_FIELDS`。
 - **狀態代碼要在 tool 層翻成中文**再給模型，否則它講不出人話。注意 `order_status` 的語意**依 `order_type` 而異**（`01` 服務訂單有報價/尾款流程，其餘類型共用另一套），用 `schemas.py` 的 `order_status_label(order_type, order_status)`，不要自己查表。
+- **草稿重複呼叫要 idempotent，不要靜靜跳過**。`session_state.py` 記下已產生的草稿（內容指紋＋整包事件內容），三個 `propose_*` tool 偵測到重複時**原樣重送同一個 `draft_id` 的 `draft` 事件**，並回 `already_awaiting_user_confirmation` 告訴模型不用再描述一次。
+  為什麼不是「完全不 emit」：實測踩過。agent 的 session 跟 App 的聊天記錄會分歧（App 重啟、聊天室清空、或那張卡因別的原因沒渲染），模型卻照著 tool 訊息跟使用者說「卡片就在畫面上」，使用者看著空白畫面。改成重送之後，「卡片是否已顯示」交給真正知道的 App 判斷。
+  指紋比對**內容**不比 `draft_id`（每次產生都是新 id，用 id 比對等於沒擋），所以使用者改了答案仍會正常產生新草稿。
+  App 端 `butler_chat_screen.dart` 的 `_appendCard` 處理三種情況：已送出過 → 完全不顯示；同一張已在前面的訊息 → **搬到最新訊息**（不是丟掉新的，否則卡片留在很上面等於看不到）；其他 → 直接加。
 - **草稿自己描述「該送去哪」**。`OrderDraft` 帶 `submit_method` / `submit_path`，事件裡是 `submit: {method, path}`。前端重播 method + path + payload 即可送出，不用拿 `kind` switch 出路徑 —— 新增草稿類型時前端不必跟著改。`kind` 有 `feedback` / `review` / `profile` 三種，只有 `feedback` 有 `service_id`/`form_id`。
 - **模型輸出一律當不可信輸入**。`propose_submission` 會拿真實表單結構逐項驗證（form_id、service_id 歸屬、topic_id 存在、必填題齊全、單複選答案在 options 內）。實測模型會把序號當 id 傳（`vendor_id=2`、`form_id=1`），沒驗證就會產生錯誤草稿。
 - **tool 的 error 訊息要能教模型自我修正**，寫清楚「你可能傳錯什麼、正確值去哪裡拿」，不要只回「參數錯誤」。實測模型收到具體錯誤後會自己重抓正確 id 再試。
@@ -234,7 +238,12 @@ agentcore logs               # 看 runtime 日誌
 - **「帶我操作一遍」導覽已實作,且是從首頁開始的跨畫面導覽**（`ai-butler-app/lib/features/tour/`，用 `tutorial_coach_mark 1.3.3`）。完整路徑：點諮詢單草稿卡 → `draft_action_sheet.dart` 跳出「直接送出 / 帶我操作一遍」→ 選導覽就 `tourSessionProvider.start(card)` 並 `context.go` 首頁 → **首頁分類磚 → 服務商列表那一家 → 商家詳情的填寫諮詢單 → 填單頁逐題 → 送出**。刻意不直接跳到填單頁：那樣使用者只學到怎麼填表，不知道這張表單在 App 的哪裡、下次怎麼自己走到。跨畫面的機制：
   - `tour_anchors.dart` 是**全域共用的 GlobalKey 登記表**（provider，刻意不 autoDispose）。導覽橫跨四個畫面，錨點若由各畫面自己持有，產生步驟的地方就拿不到別的畫面的錨點。id 一律用 `TourAnchorIds` 的函式產生，打錯字會安靜跳過那一步。
   - `tour_session.dart` 是 `TourLeg`（home/vendorList/vendorDetail）狀態機。`started` 旗標防止重複彈光圈 —— 畫面的 build 會因資料載入/捲動/鍵盤重跑多次。`advanceTo` 一定要重置 `started`。
-  - `tour_leg_host.dart` 的 `maybeStartTourLeg` 是三個導航畫面共用的啟動邏輯（檢查輪到自己 → 標記 → postFrame 啟動）。錨點還沒掛上就結束 session，不要讓使用者對著永遠不出現的光圈等。
+  - `tour_leg_host.dart` 的 `maybeStartTourLeg` 是三個導航畫面共用的啟動邏輯。**所有 provider 變更（含 `markStarted`）都在 postFrame 裡**，因為它是從 build 呼叫的，而 Riverpod 禁止在 build/initState 期間改 provider。「這一段跑不了」是靠 `buildSteps` 回傳 `null` 表達，不要在 build 裡直接呼叫 `finish()`。
+  - **導覽的失敗要看得見**。這個專案的 App 必須用 `--profile` 跑（debug 會撞到 Flutter 的 mouse_tracker assert），而 `kDebugMode` 在 profile 是 false —— 診斷輸出用 `tourLog()` 不要包 `kDebugMode`，並且走不下去時要跳 SnackBar，否則看起來只是「按了沒反應」。
+  - **啟動導覽的發起點必須是不會被銷毀的 widget**。實測踩過：寫在 bottom sheet 裡，`pop()` 之後它的 `ConsumerState` 開始銷毀，用那個 ref 改 provider 會安靜失效（畫面跳回首頁了但導覽沒啟動）。現在 sheet 只回傳 `DraftSheetAction`，由聊天畫面（shell 分頁，全程活著）發起。順帶讓 `await showModalBottomSheet` 等 sheet 關完，不用猜退場動畫時長。
+  - **首頁必須 `ref.watch(tourSessionProvider)`**。它是 `StatefulShellRoute.indexedStack` 的分頁，四個分頁一直保持已建置，切回首頁只是換 index 不會重新 build。少了這行導覽的啟動點永遠不會被呼叫。
+  - **比對服務類型要兩邊都正規化**（`PrefillCard.normalizeServiceType`）。`mock_seed_data.dart` 用補零的 `'06'`，`http_vendor_repository.dart` 用 API 要的 `'6'` —— `ServiceCategory.type` 的註解只對 mock 成立。只正規化一邊，接真實後端就會在首頁中斷。
+  - 泡泡的位置與高度：`align` 必須在建立 `TargetContent` 時決定，但 `beforeFocus` 會先捲動目標，所以 align 靠「在可捲動區域內 → 一律放下方」判斷，`maxHeight` 則由泡泡自己在 build 時量測（那時捲動已完成）。文字放 `Flexible` + `SingleChildScrollView`，空間不夠時捲文字而不是把按鈕推出畫面。
   - **導航必須由 `TourStep.onTap` 自己執行,不能靠點擊穿透**。`tutorial_coach_mark` 會在光圈區域蓋 GestureDetector 攔截點擊，底下真正的 widget 收不到。而且 `onClickTarget` 是 `TutorialCoachMark` 的**全域** callback（不是 `TargetFocus` 的欄位），要靠 `TargetFocus.identify` 分派回對應的步驟。
   - 導航步驟**不顯示「下一步」按鈕**（`TourStep.requiresTap`）。按了會跳步但畫面沒切換，導覽就錯位。
   - 商家詳情那一段是跨畫面導覽與填單頁導覽的接縫：`onTap` 設定 `pendingButlerDraftProvider(startTour: true)` 並 `finish()` session，由 `FormScreen` 接手（它要等表單載入、預填算完才知道有哪些題目）。

@@ -772,7 +772,7 @@ async def propose_submission(
         "feedback", int(args["form_id"]), sorted(feedback_content.items())
     )
     if existing := ctx.state.find_proposal(signature):
-        return _already_proposed(existing)
+        return _already_proposed(ctx, existing)
 
     service_type = str(args["service_type"])
     payload = {
@@ -804,9 +804,10 @@ async def propose_submission(
         ttl_seconds=settings.draft_ttl_seconds,
     )
     draft_store.put(draft)
-    ctx.emit("draft", **draft.to_event_payload())
+    event_payload = draft.to_event_payload()
+    ctx.emit("draft", **event_payload)
     ctx.state.remember_proposal(
-        "feedback", signature, args["summary"], draft.draft_id
+        "feedback", signature, args["summary"], draft.draft_id, event_payload
     )
 
     return {
@@ -824,18 +825,32 @@ def _draft_signature(kind: str, key: int | str, content: Any) -> str:
     return f"{kind}|{key}|{content!r}"
 
 
-def _already_proposed(existing: dict[str, Any]) -> dict[str, Any]:
-    """回給模型的「已經產生過」說明。
+def _already_proposed(
+    ctx: ToolContext, existing: dict[str, Any]
+) -> dict[str, Any]:
+    """重複呼叫時的處理：**重送同一張草稿**，不要靜靜跳過。
+
+    第一版是完全不 emit，結果比原本的問題更糟：agent 的 session 跟 App 的
+    聊天記錄會分歧（App 重啟、聊天室被清空、或那張卡因為別的原因沒被渲染），
+    模型卻照著這裡的說明跟使用者說「卡片就在畫面上」，使用者看著空白畫面。
+
+    改成原樣重送同一個 draft_id 的事件，讓「卡片是否已經在畫面上」由真正
+    知道的那一端判斷 —— App 端 `butler_chat_screen` 會依內容去重，
+    已經顯示的就不會再加一張。這樣兩種情況都對：
+      - 卡片還在 → App 丟掉重複事件，畫面不變
+      - 卡片不見了 → App 重新顯示，使用者不會被騙
 
     刻意回成正常結果而不是 error：這不是模型傳錯參數，而是它多做了一次。
-    寫清楚卡片已經在畫面上、以及什麼情況才該重新產生，它就不會硬要再試。
     """
+    ctx.emit("draft", **existing["event_payload"])
+
     return {
         "draft_id": existing["draft_id"],
         "status": "already_awaiting_user_confirmation",
         "detail": (
-            f"這張草稿（{existing['summary']}）剛剛已經產生過，卡片就在畫面上，"
-            "不需要也不要再產生一次。直接接著回應使用者目前的需求就好。"
+            f"這張草稿（{existing['summary']}）剛剛已經產生過，不需要再產生一次。"
+            "卡片已經重新送到畫面上，直接接著回應使用者目前的需求就好，"
+            "不用再描述一次草稿內容。"
             "只有在使用者要求修改內容時才重新呼叫（內容不同會算新的草稿）。"
         ),
     }
@@ -1050,7 +1065,7 @@ async def propose_review(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
 
     signature = _draft_signature("review", record_id, sorted(payload.items(), key=str))
     if existing := ctx.state.find_proposal(signature):
-        return _already_proposed(existing)
+        return _already_proposed(ctx, existing)
 
     draft = OrderDraft(
         kind="review",
@@ -1064,8 +1079,11 @@ async def propose_review(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
         ttl_seconds=settings.draft_ttl_seconds,
     )
     draft_store.put(draft)
-    ctx.emit("draft", **draft.to_event_payload())
-    ctx.state.remember_proposal("review", signature, draft.summary, draft.draft_id)
+    event_payload = draft.to_event_payload()
+    ctx.emit("draft", **event_payload)
+    ctx.state.remember_proposal(
+        "review", signature, draft.summary, draft.draft_id, event_payload
+    )
 
     return {
         "draft_id": draft.draft_id,
@@ -1146,7 +1164,7 @@ async def propose_profile_update(
 
     signature = _draft_signature("profile", ctx.actor_id, sorted(fields.items()))
     if existing := ctx.state.find_proposal(signature):
-        return _already_proposed(existing)
+        return _already_proposed(ctx, existing)
 
     draft = OrderDraft(
         kind="profile",
@@ -1159,8 +1177,11 @@ async def propose_profile_update(
     )
     draft_store.put(draft)
     # changes 讓 App 的確認卡片能顯示前後對照，不用自己再查一次
-    ctx.emit("draft", changes=changes, **draft.to_event_payload())
-    ctx.state.remember_proposal("profile", signature, summary, draft.draft_id)
+    event_payload = {"changes": changes, **draft.to_event_payload()}
+    ctx.emit("draft", **event_payload)
+    ctx.state.remember_proposal(
+        "profile", signature, summary, draft.draft_id, event_payload
+    )
 
     return {
         "draft_id": draft.draft_id,

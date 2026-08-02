@@ -37,7 +37,8 @@ class TourRunner {
 
     final tutorial = TutorialCoachMark(
       targets: <TargetFocus>[
-        for (var i = 0; i < usable.length; i++) _toTarget(usable[i], i),
+        for (var i = 0; i < usable.length; i++)
+          _toTarget(usable[i], i, _alignFor(usable[i], MediaQuery.of(context))),
       ],
       colorShadow: Colors.black,
       opacityShadow: 0.75,
@@ -45,6 +46,26 @@ class TourRunner {
       hideSkip: false,
       textSkip: '跳過導覽',
       alignSkip: Alignment.topRight,
+      // 聚焦前先把目標捲進視野。
+      //
+      // 套件不會自己捲動，目標在畫面邊緣時光圈會貼著邊、說明也擠在角落
+      // （實測圈服務商列表最後幾張卡時就是這樣）。`beforeFocus` 支援
+      // FutureOr，所以可以 await 捲動動畫結束再讓光圈定位，否則光圈會
+      // 對著捲動前的舊座標挖洞。
+      beforeFocus: (target) async {
+        final anchorContext = byId[target.identify]?.anchorKey.currentContext;
+        if (anchorContext == null) return;
+        // 固定位置的元件（底部送出鈕、bottomNavigationBar）沒有可捲動祖先，
+        // 先擋掉再呼叫，不要依賴 ensureVisible 的容錯行為。
+        if (Scrollable.maybeOf(anchorContext) == null) return;
+        await Scrollable.ensureVisible(
+          anchorContext,
+          // 0.35 讓目標偏上，下方留給說明泡泡
+          alignment: 0.35,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      },
       onClickTarget: (target) {
         final step = byId[target.identify];
         // 純解說的步驟沒有 onTap，點了不做事（光圈本身也擋住點擊）
@@ -61,7 +82,39 @@ class TourRunner {
     return tutorial;
   }
 
-  static TargetFocus _toTarget(TourStep step, int identify) {
+  /// 泡泡要放目標的上面還是下面。
+  ///
+  /// 固定放下面的話，目標一靠近螢幕底部泡泡就會被切掉（實測在服務商列表
+  /// 圈最後幾張卡時說明文字整段看不到）。
+  ///
+  /// `align` 是 [TargetContent] 的欄位，必須在建立 target 時就決定，不能等到
+  /// 真正聚焦才算。而 `beforeFocus` 又會先捲動目標，所以「現在的座標」不能
+  /// 直接用。因此分兩種情況：
+  ///   - 目標在可捲動區域內 → `beforeFocus` 會把它捲到偏上，下方一定有空間
+  ///   - 目標是固定位置的元件（底部的送出鈕、bottomNavigationBar）→ 捲不動，
+  ///     要看它實際在哪
+  static ContentAlign _alignFor(TourStep step, MediaQueryData media) {
+    final anchorContext = step.anchorKey.currentContext;
+    if (anchorContext == null) return ContentAlign.bottom;
+
+    if (Scrollable.maybeOf(anchorContext) != null) return ContentAlign.bottom;
+
+    final render = anchorContext.findRenderObject();
+    if (render is! RenderBox || !render.hasSize) return ContentAlign.bottom;
+
+    final top = render.localToGlobal(Offset.zero).dy;
+    final bottom = top + render.size.height;
+    final spaceAbove = top - media.padding.top;
+    final spaceBelow = (media.size.height - media.padding.bottom) - bottom;
+
+    return spaceBelow >= spaceAbove ? ContentAlign.bottom : ContentAlign.top;
+  }
+
+  static TargetFocus _toTarget(
+    TourStep step,
+    int identify,
+    ContentAlign align,
+  ) {
     return TargetFocus(
       identify: identify,
       keyTarget: step.anchorKey,
@@ -73,9 +126,10 @@ class TourRunner {
       enableTargetTab: step.requiresTap,
       contents: <TargetContent>[
         TargetContent(
-          align: ContentAlign.bottom,
+          align: align,
           builder: (context, controller) => _Bubble(
             step: step,
+            align: align,
             // 導航步驟不給「下一步」：按了會跳步但畫面沒切換，導覽就錯位。
             onNext: step.requiresTap
                 ? null
@@ -88,18 +142,44 @@ class TourRunner {
 }
 
 class _Bubble extends StatelessWidget {
-  const _Bubble({required this.step, this.onNext});
+  const _Bubble({required this.step, required this.align, this.onNext});
 
   final TourStep step;
+
+  /// 泡泡被放在目標的哪一側，決定要量哪一邊的剩餘空間。
+  final ContentAlign align;
 
   /// null 代表這一步只能靠點擊目標前進。
   final VoidCallback? onNext;
 
+  /// 泡泡最多能佔多高。
+  ///
+  /// 在 build 時量測而不是建立 target 時：`beforeFocus` 會先把目標捲進視野，
+  /// 建立 target 那時的座標是舊的，用它算出來的高度會失準。
+  double _maxHeight(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final render = step.anchorKey.currentContext?.findRenderObject();
+    if (render is! RenderBox || !render.hasSize) return 240;
+
+    final top = render.localToGlobal(Offset.zero).dy;
+    final bottom = top + render.size.height;
+
+    final available = align == ContentAlign.bottom
+        ? (media.size.height - media.padding.bottom) - bottom
+        : top - media.padding.top;
+
+    // 扣掉光圈的 paddingFocus 與泡泡自己的 margin/padding。
+    // 太小的話至少留一點高度，讓內容可以捲動而不是完全看不到。
+    final usable = available - 56;
+    return usable < 120 ? 120 : usable;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(top: AppSpacing.sm),
+      margin: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       padding: const EdgeInsets.all(AppSpacing.md),
+      constraints: BoxConstraints(maxHeight: _maxHeight(context)),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         borderRadius: AppRadius.mdAll,
@@ -112,7 +192,13 @@ class _Bubble extends StatelessWidget {
             Text(step.title, style: AppTypography.label),
             const SizedBox(height: AppSpacing.xxs),
           ],
-          Text(step.instruction, style: AppTypography.body),
+          // 說明文字放進可捲動區並用 Flexible 包住：空間不夠時捲動文字，
+          // 而不是把下面的按鈕/提示推出泡泡外面（那會讓使用者卡住）。
+          Flexible(
+            child: SingleChildScrollView(
+              child: Text(step.instruction, style: AppTypography.body),
+            ),
+          ),
           const SizedBox(height: AppSpacing.sm),
           if (onNext == null)
             // 導航步驟：明確告訴使用者要點哪裡才會前進，

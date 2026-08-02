@@ -43,7 +43,12 @@ class SessionState:
         return next((p for p in self.proposals if p["signature"] == signature), None)
 
     def remember_proposal(
-        self, kind: str, signature: str, summary: str, draft_id: str
+        self,
+        kind: str,
+        signature: str,
+        summary: str,
+        draft_id: str,
+        event_payload: dict[str, Any],
     ) -> None:
         self.proposals.append(
             {
@@ -51,6 +56,9 @@ class SessionState:
                 "signature": signature,
                 "summary": summary,
                 "draft_id": draft_id,
+                # 存整包事件內容，重複呼叫時原樣重送。
+                # 只存 draft_id 的話沒辦法還原 profile 草稿的 changes 欄位。
+                "event_payload": event_payload,
             }
         )
         # 只留最近幾張，避免長對話把提示撐大
