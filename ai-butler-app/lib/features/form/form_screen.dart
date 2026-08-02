@@ -61,6 +61,18 @@ class _FormScreenState extends ConsumerState<FormScreen> {
   GlobalKey get _submitAnchor =>
       ref.read(tourAnchorsProvider).of(TourAnchorIds.formSubmit);
 
+  /// 從作答裡取出日期題的值，作為 capacity API 的 time 參數。
+  /// 使用者尚未選日期時回空字串，provider 會跳過不呼叫 API。
+  String _resolveTimeAnswer(FormDefinition definition, FormAnswers answers) {
+    final dateTopic = definition.firstTopicOfType(TopicType.date);
+    if (dateTopic == null) return '';
+    final answer = answers.answerOf(dateTopic.topicId);
+    if (answer is DateAnswer && answer.date != null) {
+      return answer.toJson() as String; // YYYY-MM-DD
+    }
+    return '';
+  }
+
   /// 管家草稿只處理一次。
   ///
   /// `build` 會因為 answers 變動而重跑，不擋的話每次都重新套預填，
@@ -123,7 +135,8 @@ class _FormScreenState extends ConsumerState<FormScreen> {
           definition: definition,
           prefill: result,
           topicAnchors: <int, GlobalKey>{
-            for (final t in definition.allTopics) t.topicId: _anchorFor(t.topicId),
+            for (final t in definition.allTopics)
+              t.topicId: _anchorFor(t.topicId),
           },
           submitAnchor: _submitAnchor,
         ),
@@ -227,12 +240,23 @@ class _FormScreenState extends ConsumerState<FormScreen> {
               WidgetsBinding.instance
                   .addPostFrameCallback((_) => _checkDraft(definition));
             }
+            // 首次進入時檢查草稿
+            WidgetsBinding.instance
+                .addPostFrameCallback((_) => _checkDraft(definition));
+            final maxCapacity = ref
+                .watch(capacityProvider((
+                  serviceId: widget.serviceId ?? 0,
+                  time: _resolveTimeAnswer(definition,
+                      ref.watch(formAnswersProvider(definition.formId))),
+                )))
+                .valueOrNull;
             return _FormBody(
               definition: definition,
               errors: _errors,
               anchorFor: _anchorFor,
               onErrorsChanged: (errors) => setState(() => _errors = errors),
               onAnswerChanged: () => _scheduleDraftSave(definition),
+              maxCapacity: maxCapacity,
             );
           },
         ),
@@ -251,7 +275,14 @@ class _FormScreenState extends ConsumerState<FormScreen> {
 
   Future<void> _submit(FormDefinition definition) async {
     final answers = ref.read(formAnswersProvider(definition.formId));
-    final errors = FormValidator.validate(definition, answers);
+    final maxCapacity = ref
+        .read(capacityProvider((
+          serviceId: widget.serviceId ?? 0,
+          time: _resolveTimeAnswer(definition, answers),
+        )))
+        .valueOrNull;
+    final errors =
+        FormValidator.validate(definition, answers, maxCapacity: maxCapacity);
     setState(() => _errors = errors);
     if (errors.isNotEmpty) return;
 
@@ -374,6 +405,7 @@ class _FormBody extends ConsumerWidget {
     required this.anchorFor,
     required this.onErrorsChanged,
     this.onAnswerChanged,
+    this.maxCapacity,
   });
 
   final FormDefinition definition;
@@ -383,6 +415,7 @@ class _FormBody extends ConsumerWidget {
   final GlobalKey Function(int topicId) anchorFor;
   final void Function(ValidationErrors errors) onErrorsChanged;
   final VoidCallback? onAnswerChanged;
+  final int? maxCapacity;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -403,10 +436,12 @@ class _FormBody extends ConsumerWidget {
                 answer: answers.answerOf(topic.topicId),
                 errorMessage: errors[topic.topicId],
                 anchorKey: anchorFor(topic.topicId),
+                maxCapacity: maxCapacity,
                 onChanged: (value) {
                   notifier.setAnswer(topic.topicId, value);
                   onAnswerChanged?.call();
-                  final message = FormValidator.validateTopic(topic, value);
+                  final message = FormValidator.validateTopic(topic, value,
+                      maxCapacity: maxCapacity);
                   final next = Map<int, String>.of(errors);
                   if (message == null) {
                     next.remove(topic.topicId);

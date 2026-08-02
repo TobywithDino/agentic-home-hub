@@ -44,6 +44,11 @@ class ApiEndpoints {
   static String serviceReviews(int serviceId) =>
       '/app-api/services/$serviceId/reviews';
 
+  // GET /app-api/services/{service_id}/review-summary — 評價 AI 摘要
+  // 尚未生成過摘要時回 404（用 ApiClient.getOptional 取用）。
+  static String serviceReviewSummary(int serviceId) =>
+      '/app-api/services/$serviceId/review-summary';
+
   // === 11. 照片預簽章上傳 ===
   // TODO(backend): 確認預簽章回應欄位（期望 {upload_url, file_id}）
   static const String mediaPresign = '/media/presign';
@@ -80,4 +85,9 @@ class ApiEndpoints {
   static const String counties = '/regions/counties';
   static String districts(String countyCode) =>
       '/regions/counties/$countyCode/districts';
+
+  // === 餐廳訂位容量 ===
+  // GET /app-api/services/{service_id}/available-capacity
+  static String availableCapacity(int serviceId) =>
+      '/app-api/services/$serviceId/available-capacity';
 }

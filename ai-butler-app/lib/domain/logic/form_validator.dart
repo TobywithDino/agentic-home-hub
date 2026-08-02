@@ -23,12 +23,14 @@ class FormValidator {
   /// 驗證整份表單。回傳的 map 為空即代表通過。
   static ValidationErrors validate(
     FormDefinition definition,
-    FormAnswers answers,
-  ) {
+    FormAnswers answers, {
+    int? maxCapacity,
+  }) {
     final errors = <int, String>{};
 
     for (final topic in definition.allTopics) {
-      final error = validateTopic(topic, answers.answerOf(topic.topicId));
+      final error = validateTopic(topic, answers.answerOf(topic.topicId),
+          maxCapacity: maxCapacity);
       if (error != null) errors[topic.topicId] = error;
     }
 
@@ -36,7 +38,8 @@ class FormValidator {
   }
 
   /// 驗證單一題目，供使用者修正後即時重新檢查（Requirement 8.2）。
-  static String? validateTopic(FormTopic topic, AnswerValue? value) {
+  static String? validateTopic(FormTopic topic, AnswerValue? value,
+      {int? maxCapacity}) {
     if (!topic.type.collectsAnswer) return null;
 
     final isEmpty = value == null || !value.isFilled;
@@ -52,20 +55,35 @@ class FormValidator {
     if (isEmpty) return null; // 非必填且未填，通過。
 
     return switch (topic.type) {
-      TopicType.shortText => _validateShortText(topic, value as TextAnswer),
+      TopicType.shortText => _validateShortText(topic, value as TextAnswer,
+          maxCapacity: maxCapacity),
       TopicType.photo => _validatePhoto(topic, value as MediaAnswer),
-      TopicType.contactWithAddress =>
-        _validateContact(value as ContactAnswer),
+      TopicType.contactWithAddress => _validateContact(value as ContactAnswer),
       TopicType.contactWithoutAddress =>
         _validateContact(value as ContactAnswer),
       _ => null,
     };
   }
 
-  static String? _validateShortText(FormTopic topic, TextAnswer answer) {
-    if (!topic.isNumberOnly) return null;
-    final isNumeric = RegExp(r'^\d+$').hasMatch(answer.text.trim());
-    return isNumeric ? null : numberOnlyMessage;
+  static String? _validateShortText(FormTopic topic, TextAnswer answer,
+      {int? maxCapacity}) {
+    final text = answer.text.trim();
+
+    // 原有的純數字檢查（is_number_only 題型）
+    if (topic.isNumberOnly) {
+      final isNumeric = RegExp(r'^\d+$').hasMatch(text);
+      if (!isNumeric) return numberOnlyMessage;
+    }
+
+    // 餐廳訂位人數檢查：題目標題包含「人數」且有設定 maxCapacity，
+    // 把字串轉數字做比較，≤0 或超過上限都擋住不讓送出。
+    if (maxCapacity != null && topic.title.contains('人數') && text.isNotEmpty) {
+      final num = int.tryParse(text);
+      if (num == null) return numberOnlyMessage;
+      if (num <= 0) return '人數必須大於 0';
+      if (num > maxCapacity) return '人數不得超過 $maxCapacity 人';
+    }
+    return null;
   }
 
   static String? _validatePhoto(FormTopic topic, MediaAnswer answer) {
