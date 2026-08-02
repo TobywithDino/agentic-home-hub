@@ -642,7 +642,8 @@ async def get_service_review_summary(
     ```
 
     欄位說明：
-    - `summary_content`：消費者版為純文字口碑摘要（整體評分、服務亮點、注意事項、一句話總結）
+    - `summary_content`：消費者版為近一週（或最近至多 20 則歷史）評價的純文字口碑摘要，≤120 字（繁體中文）；
+      若資料來自非近一週歷史評價，摘要開頭會說明來源；完全無評價資料時為「目前尚無評價資料。」
     - `summary_highlights`：消費者版目前為 `null`（保留欄位，商家版才使用此欄位存結構化 JSON）
     - `sentiment_stats`：消費者版目前為 `null`（商家版才使用）
     - `is_stale`：計算欄位，`true` 代表有新評價尚未納入本份摘要

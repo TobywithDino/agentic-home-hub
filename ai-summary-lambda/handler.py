@@ -13,14 +13,14 @@ event 參數（皆為可選，不傳就跑全部）：
 
 兩種摘要視角：
   consumer（寫入 mms_review_summary_service）
-    - 針對每個服務項目，分析全部評價，輸出純文字口碑摘要
+    - 針對每個服務項目，分析近 7 天評價，輸出純文字口碑摘要（≤120 字）
     - 寫回：PUT /merchant-api/services/{id}/review-summary
 
   merchant（寫入 mms_review_summary_vendor）
     - 針對每個商家，只分析近 7 天評價，輸出結構化 JSON：
         summary_content:  分析期間字串
         vendor_name:      商家名稱（頂層欄位）
-        summary_highlights: { summary（≤50字字串）, suggestions（3~4點陣列） }
+        summary_highlights: { summary（≤125字字串）, suggestions（3~4點陣列） }
         sentiment_stats:  { positive, neutral, negative }
     - 寫回：PUT /merchant-api/vendors/{id}/review-summary
 
@@ -99,9 +99,17 @@ def lambda_handler(event, context):
 def _run_consumer_summaries(only_service_id: str | None) -> list[dict]:
     """
     消費者視角：針對每個服務項目產生摘要。
+    只使用近一週（7天）內的評價。
     若 only_service_id 有值，只跑該服務。
     """
     summaries = []
+
+    # 計算近一週時間範圍（UTC）
+    now_utc = datetime.now(timezone.utc)
+    week_ago = now_utc - timedelta(days=7)
+    week_start = week_ago.strftime("%Y/%m/%d")
+    week_end = now_utc.strftime("%Y/%m/%d")
+    week_ago_iso = week_ago.isoformat()
 
     if only_service_id:
         service_ids = [int(only_service_id)]
@@ -117,26 +125,41 @@ def _run_consumer_summaries(only_service_id: str | None) -> list[dict]:
         service_name = service_names.get(service_id, f"Service {service_id}")
         logger.info("[consumer] Processing service_id=%d name=%s", service_id, service_name)
 
-        reviews = _fetch_consumer_reviews(service_id)
-        if not reviews:
-            logger.info("[consumer] service_id=%d: no reviews, skipping", service_id)
-            continue
+        all_reviews = _fetch_consumer_reviews(service_id)
 
-        prompt = build_consumer_prompt(service_name, reviews)
+        # 近一週評價
+        recent_reviews = _filter_reviews_by_date(all_reviews, week_ago_iso)
+        logger.info(
+            "[consumer] service_id=%d: total=%d recent(7d)=%d",
+            service_id, len(all_reviews), len(recent_reviews),
+        )
+
+        # 無近一週評價時，取最近至多 20 則歷史評價作為 fallback
+        if recent_reviews:
+            prompt_reviews = recent_reviews
+            data_note = ""
+        else:
+            prompt_reviews = sorted(
+                all_reviews, key=lambda r: r.get("cre_time", ""), reverse=True
+            )[:20]
+            data_note = f"以下為非近期一週內最近 {len(prompt_reviews)} 則評價" if prompt_reviews else ""
+
+        prompt = build_consumer_prompt(service_name, prompt_reviews, week_start, week_end, data_note=data_note)
         summary_text = _call_bedrock(prompt)
 
         logger.info(
-            "[consumer] service_id=%d | review_count=%d\n%s\n%s\n%s",
+            "[consumer] service_id=%d | recent_count=%d fallback=%s\n%s\n%s\n%s",
             service_id,
-            len(reviews),
+            len(recent_reviews),
+            "yes" if not recent_reviews and prompt_reviews else "no",
             "=" * 60,
             summary_text,
             "=" * 60,
         )
 
-        # 計算寫回需要的聚合值
-        avg_rating = _calc_avg_rating(reviews)
-        latest_review_time = _calc_latest_review_time(reviews)
+        # 計算寫回需要的聚合值（仍用全部評價，供 is_stale 判斷）
+        avg_rating = _calc_avg_rating(all_reviews)
+        latest_review_time = _calc_latest_review_time(all_reviews)
         service_vendor_id = service_names_meta.get(service_id, {}).get("service_vendor_id")
 
         # 寫回 DB（PUT /merchant-api/services/{service_id}/review-summary）
@@ -145,7 +168,7 @@ def _run_consumer_summaries(only_service_id: str | None) -> list[dict]:
             service_name=service_name,
             service_vendor_id=service_vendor_id,
             summary_text=summary_text,
-            review_count=len(reviews),
+            review_count=len(all_reviews),
             avg_rating=avg_rating,
             latest_review_time=latest_review_time,
         )
@@ -154,7 +177,7 @@ def _run_consumer_summaries(only_service_id: str | None) -> list[dict]:
             "type": "consumer",
             "service_id": service_id,
             "service_name": service_name,
-            "review_count": len(reviews),
+            "recent_review_count": len(recent_reviews),
             "summary": summary_text,
         })
 
@@ -213,14 +236,25 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
             vendor_id, len(all_reviews), len(recent_reviews),
         )
 
-        # 近一週無評價時仍呼叫 LLM（讓 LLM 輸出「本週尚無新評價資料」的結構化回應）
-        prompt = build_merchant_prompt(vendor_name, recent_reviews, week_start, week_end, service_names_for_prompt)
+        # 無近一週評價時，取最近至多 20 則歷史評價作為 fallback
+        if recent_reviews:
+            prompt_reviews = recent_reviews
+            data_note = ""
+        else:
+            prompt_reviews = sorted(
+                all_reviews, key=lambda r: r.get("cre_time", ""), reverse=True
+            )[:20]
+            data_note = f"以下為非近期一週內最近 {len(prompt_reviews)} 則評價" if prompt_reviews else ""
+
+        # 近一週無評價時仍呼叫 LLM
+        prompt = build_merchant_prompt(vendor_name, prompt_reviews, week_start, week_end, service_names_for_prompt, data_note=data_note)
         raw_output = _call_bedrock(prompt)
 
         logger.info(
-            "[merchant] vendor_id=%d | recent_count=%d\n%s\n%s\n%s",
+            "[merchant] vendor_id=%d | recent_count=%d fallback=%s\n%s\n%s\n%s",
             vendor_id,
             len(recent_reviews),
+            "yes" if not recent_reviews and prompt_reviews else "no",
             "=" * 60,
             raw_output,
             "=" * 60,

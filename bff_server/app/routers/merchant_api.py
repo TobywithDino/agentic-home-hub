@@ -114,8 +114,9 @@ async def list_all_services(
 
     **說明**
 
-    供 AI summary Lambda 等內部服務批次取得全部服務項目 id 與名稱，
-    避免直接呼叫 api_server port 8000。
+    供 AI summary Lambda 批次取得全部服務項目 id、名稱與所屬商家 id，
+    避免直接呼叫 api_server port 8000。Lambda 用 `name` 欄位建立服務名稱
+    對照表（`{id: name}`），讓 LLM prompt 顯示服務實際名稱而非 service_id。
     自動處理分頁，一次回傳完整清單。
     """
     items = await db_api.get_all_items("/services")
@@ -143,8 +144,9 @@ async def list_all_vendors(
 
     **說明**
 
-    供 AI summary Lambda 等內部服務批次取得全部商家 id 與名稱，
-    避免直接呼叫 api_server port 8000。
+    供 AI summary Lambda 批次取得全部商家 id 與名稱，
+    避免直接呼叫 api_server port 8000。Lambda 用 `name` 欄位在 prompt
+    中顯示實際商家名稱而非 vendor_id。
     自動處理分頁，一次回傳完整清單。
     """
     items = await db_api.get_all_items("/service-vendors")
@@ -804,20 +806,28 @@ async def upsert_service_review_summary(
     ```json
     {
       "service_vendor_id": 1,
-      "summary_content": "整體評價正向，顧客普遍稱讚服務態度與準時性...",
-      "summary_highlights": { "pros": ["態度好", "準時"], "cons": ["價格偏高"] },
-      "sentiment_stats": { "positive": 12, "neutral": 3, "negative": 2 },
+      "service_name": "冷氣清洗",
+      "summary_content": "近一週服務口碑正向，顧客普遍稱讚師傅態度親切與準時...",
+      "summary_highlights": null,
+      "sentiment_stats": null,
       "source_review_count": 17,
       "source_avg_rating": 4.5,
       "latest_review_cre_time": "2026-08-01T09:00:00Z",
-      "ai_model": "claude-3-5-sonnet",
-      "generate_status": "00=待生成 01=生成中 02=已完成 03=失敗",
+      "ai_model": "us.anthropic.claude-sonnet-4-6",
+      "generate_status": "02",
       "error_message": null
     }
     ```
-    `source_review_count`、`source_avg_rating`、`latest_review_cre_time`
-    應為呼叫端（AI 生成流程）當下查詢到的最新評價聚合值，與生成結果
-    一起送出；`generate_time` 由 api_server 端自動填入當前時間。
+
+    欄位說明：
+    - `service_name`：服務項目名稱，由 Lambda 從服務清單取得後帶入
+    - `summary_content`：近一週（或最近至多 20 則歷史）評價的純文字口碑摘要，≤120 字；
+      若資料來自非近一週，摘要開頭會說明；完全無評價時為「目前尚無評價資料。」
+    - `summary_highlights`：消費者版固定為 `null`
+    - `sentiment_stats`：消費者版固定為 `null`
+    - `source_review_count`：全部歷史評價總數（供 `is_stale` 比對）
+    - `source_avg_rating`：全部歷史評價平均分
+    - `generate_time`：由 api_server 端自動填入當前時間，呼叫端不需指定
 
     **輸出**：寫入後的完整摘要物件（`ServiceReviewSummaryOut`，含計算欄位
     `is_stale`）。該 `service_id` 尚無摘要記錄時回 201（新建），已有記錄
@@ -825,7 +835,7 @@ async def upsert_service_review_summary(
 
     **說明**
 
-    給上層 AI 摘要生成流程（例如 Lambda）呼叫 Bedrock 等模型產生摘要後，
+    給 AI 摘要生成流程（Lambda）呼叫 Bedrock 產生近一週口碑摘要後，
     把結果寫回 `mms_review_summary_service`。此端點**不呼叫 LLM**，
     純粹轉發到 api_server 對應端點做資料存取，覆寫式快取設計（同一
     `service_id` 只保留最新 1 筆，不留歷史版本）。
@@ -877,7 +887,8 @@ async def get_vendor_review_summary(
     欄位說明：
     - `summary_content`：分析期間字串，格式 `分析期間：YYYY/MM/DD – YYYY/MM/DD`
     - `vendor_name`：商家名稱（頂層欄位，平行於 `summary_content`）
-    - `summary_highlights.summary`：本週住戶需求 AI 摘要，一段字串，≤50 字
+    - `summary_highlights.summary`：本週住戶需求 AI 摘要，一段字串，≤125 字；
+      若資料來自非近一週歷史評價，摘要開頭會說明來源
     - `summary_highlights.suggestions`：廠商營運與服務優化建議，3~4 點陣列，每點 ≤20 字
     - `sentiment_stats`：近一週評價情緒統計（`positive`=overall_rating 4~5、`neutral`=3、`negative`=1~2）
     - `service_breakdown`：各服務項目評價數/平均分快取（全部評價計算，非僅近一週）
@@ -936,7 +947,8 @@ async def upsert_vendor_review_summary(
     欄位說明：
     - `summary_content`：分析期間字串，由 Lambda 填入 `分析期間：YYYY/MM/DD – YYYY/MM/DD`
     - `vendor_name`：商家名稱（頂層欄位，平行於 `summary_content`）
-    - `summary_highlights.summary`：本週住戶需求 AI 摘要，一段字串，≤50 字，由 Lambda 呼叫 Bedrock 生成
+    - `summary_highlights.summary`：本週住戶需求 AI 摘要，一段字串，≤125 字，由 Lambda 呼叫 Bedrock 生成；
+      若資料來自非近一週歷史評價，摘要開頭會說明來源
     - `summary_highlights.suggestions`：廠商營運與服務優化建議，3~4 點陣列，每點 ≤20 字
     - `sentiment_stats`：近一週評價的情緒統計，`positive`/`neutral`/`negative` 各為筆數
     - `service_breakdown`：各服務項目全部評價的數量與平均分快取
