@@ -5,10 +5,12 @@ import {
   fetchDashboardStats,
   fetchOrderTrends,
   getDashboardAiAnalysis,
+  regenerateDashboardAiAnalysis,
   SUMMARY_STATUS_LABELS,
   type DashboardStats,
   type OrderTrend,
   type AiAnalysis,
+  type SummaryRefreshPhase,
 } from '@/api'
 import { useServiceContext } from '@/contexts/ServiceContext'
 import {
@@ -51,6 +53,8 @@ export default function Dashboard() {
   // AI Insight state
   const [aiAnalysis, setAiAnalysis] = useState<AiAnalysis | null>(null)
   const [aiLoading, setAiLoading] = useState(true)
+  /** 重新生成摘要的階段，用來顯示「AI 正在生成」而非只是轉圈 */
+  const [aiPhase, setAiPhase] = useState<SummaryRefreshPhase | null>(null)
 
   // 服務清單用於把 service_breakdown 的 service_id 換成可讀名稱
   const { services } = useServiceContext()
@@ -71,11 +75,23 @@ export default function Dashboard() {
     loadData()
   }, [])
 
+  /**
+   * 重新生成摘要
+   *
+   * 後端的 refresh 端點是非同步觸發（立即回 202），所以這裡要等 api 層
+   * 輪詢到 generate_status 變成已完成／失敗才會拿到結果 ——
+   * 期間保持 loading，避免先把舊摘要印出來讓人以為已經更新。
+   */
   const handleRefreshAi = useCallback(async () => {
     setAiLoading(true)
-    const data = await getDashboardAiAnalysis()
-    setAiAnalysis(data)
-    setAiLoading(false)
+    setAiPhase('triggering')
+    try {
+      const data = await regenerateDashboardAiAnalysis({ onPhase: setAiPhase })
+      setAiAnalysis(data)
+    } finally {
+      setAiPhase(null)
+      setAiLoading(false)
+    }
   }, [])
 
   if (loading) {
@@ -148,9 +164,23 @@ export default function Dashboard() {
               disabled={aiLoading}
             >
               <RefreshCw className={`h-3.5 w-3.5 ${aiLoading ? 'animate-spin' : ''}`} />
-              重新載入摘要
+              {aiPhase === 'triggering'
+                ? '觸發中...'
+                : aiPhase === 'generating'
+                  ? 'AI 生成中...'
+                  : '重新生成摘要'}
             </Button>
           </div>
+
+          {/* 生成是非同步的，明確告知使用者正在等 AI 產出，而非畫面卡住 */}
+          {aiPhase === 'generating' && (
+            <div className="mx-6 mb-3 rounded-lg bg-white/10 border border-white/20 px-4 py-2.5">
+              <p className="text-xs text-white/80">
+                AI 正在分析最新評價，完成後畫面會自動更新。這段時間可以先做別的事，
+                不需要停留在此頁重複點擊。
+              </p>
+            </div>
+          )}
 
           {/* 生成失敗時顯示後端回傳的原因 */}
           {!aiLoading && aiAnalysis?.generateStatus === '03' && aiAnalysis.errorMessage && (

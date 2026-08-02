@@ -9,6 +9,7 @@ import {
   declineFeedback,
   type FormFeedback,
   type FeedbackStatus,
+  type FeedbackAnswerItem,
 } from '@/api'
 import { useServiceContext } from '@/contexts/ServiceContext'
 import { ArrowUpDown, CheckCircle2, XCircle } from 'lucide-react'
@@ -19,6 +20,51 @@ function getStatusVariant(status: FeedbackStatus) {
     case '已接單': return 'success' as const
     case '已拒絕': return 'destructive' as const
   }
+}
+
+/**
+ * 依題目型別選擇答案的呈現方式
+ *
+ * 每張表單的題目組成都不同，所以詳細頁不寫死欄位，
+ * 而是照題目型別決定用 Badge、保留換行的段落、還是單行文字。
+ */
+function AnswerValue({ item }: { item: FeedbackAnswerItem }) {
+  // 照片題：後端只存路徑／檔名，商家無法直接預覽，因此只呈現張數
+  if ((item.photoCount ?? 0) > 0) {
+    return (
+      <span className="text-slate-700">
+        {item.photoCount} 張照片
+        <span className="text-xs text-slate-400 ml-1.5">
+          （後端僅提供儲存路徑，無法預覽）
+        </span>
+      </span>
+    )
+  }
+
+  if (item.unanswered || item.values.length === 0) {
+    return <span className="text-slate-400">未填寫</span>
+  }
+
+  if (item.inputType === 'single_choice' || item.inputType === 'multi_choice') {
+    return (
+      <span className="flex flex-wrap gap-1.5">
+        {item.values.map((v, idx) => (
+          <Badge key={`${v}-${idx}`} variant="secondary">
+            {v}
+          </Badge>
+        ))}
+      </span>
+    )
+  }
+
+  // 詳答／備註可能是多行，保留換行
+  if (item.inputType === 'long_text' || item.inputType === 'remark') {
+    return (
+      <span className="whitespace-pre-line leading-relaxed">{item.values.join('\n')}</span>
+    )
+  }
+
+  return <span className="font-medium">{item.values.join('、')}</span>
 }
 
 type SortKey = 'id' | 'contactName' | 'serviceType' | 'preferredContactTime' | 'status'
@@ -297,26 +343,89 @@ export default function Consultations() {
               <p className="text-sm mt-1 p-3 bg-slate-50 rounded-lg">{selected.address}</p>
             </div>
 
-            <div>
-              <span className="text-sm text-slate-500">選擇的選項</span>
-              <div className="flex flex-wrap gap-2 mt-1">
-                {selected.selectedOptions.map((opt) => (
-                  <Badge key={opt} variant="secondary">{opt}</Badge>
-                ))}
+            {selected.specialRequirements && (
+              <div>
+                <span className="text-sm text-slate-500">特殊需求</span>
+                <p className="text-sm mt-1 p-3 bg-slate-50 rounded-lg">
+                  {selected.specialRequirements}
+                </p>
               </div>
-            </div>
+            )}
 
-            <div>
-              <span className="text-sm text-slate-500">特殊需求</span>
-              <p className="text-sm mt-1 p-3 bg-slate-50 rounded-lg">{selected.specialRequirements}</p>
-            </div>
+            {/* 📝 諮詢表單內容：依該筆諮詢單所屬表單版本的題組／題目順序逐題呈現，
+                所以不同服務的表單會長出不同的欄位組合 */}
+            <section className="space-y-2">
+              <h3 className="text-sm font-semibold text-slate-700 border-b border-slate-200 pb-1 flex items-center justify-between gap-2">
+                <span>📝 諮詢表單內容</span>
+                {selected.formId != null && (
+                  <span className="text-xs font-normal text-slate-400">
+                    表單版本 #{selected.formId}
+                  </span>
+                )}
+              </h3>
 
-            <div>
-              <span className="text-sm text-slate-500">客戶描述</span>
-              <p className="text-sm mt-1 p-3 bg-slate-50 rounded-lg leading-relaxed">
-                {selected.content}
-              </p>
-            </div>
+              {selected.answerSections && selected.answerSections.length > 0 ? (
+                <div className="space-y-4">
+                  {selected.answerSections.map((section, sIdx) => (
+                    <div key={section.groupId ?? `s-${sIdx}`} className="space-y-1.5">
+                      {section.groupName && (
+                        <p className="text-xs font-semibold text-slate-500">
+                          {section.groupName}
+                        </p>
+                      )}
+                      <dl className="rounded-md border border-slate-200 divide-y divide-slate-100 overflow-hidden">
+                        {section.items.map((item, iIdx) => (
+                          <div
+                            key={item.topicId ?? `i-${iIdx}`}
+                            className="grid grid-cols-1 sm:grid-cols-[10rem_1fr] gap-0.5 sm:gap-3 px-3 py-2 odd:bg-slate-50/60"
+                          >
+                            <dt className="text-sm text-slate-500">
+                              {item.title}
+                              {item.isRequired && (
+                                <span className="text-red-400 ml-0.5" title="必填">
+                                  *
+                                </span>
+                              )}
+                              {item.hint && (
+                                <span className="block text-[11px] text-slate-400 mt-0.5">
+                                  {item.hint}
+                                </span>
+                              )}
+                            </dt>
+                            <dd className="text-sm text-slate-800">
+                              <AnswerValue item={item} />
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  ))}
+                </div>
+              ) : selected.content ? (
+                /* 表單結構取不到（版本已不存在等）→ 退回多行文字 */
+                <div className="rounded-md bg-slate-50 border border-slate-200 p-3">
+                  <p className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">
+                    {selected.content}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-400 py-1">此諮詢單沒有可解析的表單內容</p>
+              )}
+
+              {/* 沒有表單結構時，選擇題答案另外以 Badge 補充 */}
+              {!selected.answerSections?.length && selected.selectedOptions.length > 0 && (
+                <div>
+                  <span className="text-xs text-slate-500">選擇的選項</span>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {selected.selectedOptions.map((opt, idx) => (
+                      <Badge key={`${opt}-${idx}`} variant="secondary">
+                        {opt}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
 
             {/* Decline Reason (if already declined) */}
             {selected.status === '已拒絕' && selected.declineReason && (
