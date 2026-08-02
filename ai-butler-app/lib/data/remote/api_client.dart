@@ -54,6 +54,25 @@ class ApiClient {
         ));
   }
 
+  /// GET 請求，但把 404 當成「沒有這筆資料」而非錯誤，回傳 null。
+  ///
+  /// 用於後端以 404 表達「尚未產生／尚無內容」的端點（例如評價 AI 摘要），
+  /// 這種情況畫面應該安靜地不顯示該區塊，而不是跳錯誤。
+  Future<Response<T>?> getOptional<T>(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    try {
+      return await get<T>(path, queryParameters: queryParameters);
+    } on AppError catch (error) {
+      final cause = error.cause;
+      if (cause is DioException && cause.response?.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
   /// POST 請求（不重試）。
   Future<Response<T>> post<T>(
     String path, {

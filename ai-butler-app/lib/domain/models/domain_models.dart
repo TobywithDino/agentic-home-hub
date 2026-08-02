@@ -317,6 +317,7 @@ class ConsultationItem {
     required this.serviceName,
     required this.submittedAt,
     required this.status,
+    this.feedbackContent = '',
   });
 
   final String feedbackNo;
@@ -325,6 +326,9 @@ class ConsultationItem {
 
   /// 後端的處理狀態文字（例如「未讀」「已讀」「已受理」）。
   final String status;
+
+  /// `feedback_content` 解析後的可讀多行文字（題目：答案），供詳情頁顯示。
+  final String feedbackContent;
 }
 
 /// 訂單品項明細，對應 `mms_order_record.order_items` JSONB 內的
@@ -390,6 +394,7 @@ class OrderItem {
     this.serviceId = 0,
     this.serviceVendorId = 0,
     this.serviceName = '',
+    this.vendorName = '',
     this.contactMobile = '',
     this.commentStatus = '01',
     this.review,
@@ -402,6 +407,7 @@ class OrderItem {
     this.serviceTime,
     this.completeTime,
     this.cancelTime,
+    this.vendorDataContent = '',
   });
 
   final int recordId;
@@ -415,6 +421,9 @@ class OrderItem {
   final num finalAmount;
   final DateTime orderTime;
   final String serviceName;
+
+  /// 服務商名稱（BFF `order_enrich_utils` 附加的 `vendor_name`）。
+  final String vendorName;
   final String contactMobile;
 
   /// 00=無須評價 01=未評價 02=已評價
@@ -437,6 +446,9 @@ class OrderItem {
   final DateTime? serviceTime;
   final DateTime? completeTime;
   final DateTime? cancelTime;
+
+  /// `vendor_data.content`：接單時打包的原始諮詢內容（多行可讀文字），供詳情頁顯示。
+  final String vendorDataContent;
 
   /// 訂單是否已完成。
   ///

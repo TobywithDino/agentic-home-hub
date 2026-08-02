@@ -43,8 +43,18 @@ class HttpOrderRepository implements OrderRepository {
     }
 
     try {
+      final rawFeedbacks = _asList(body['feedbacks']);
+
+      // 取得表單名稱作為服務名稱——失敗不影響主流程，只是名稱 fallback。
+      Map<int, String> serviceNames;
+      try {
+        serviceNames = await _fetchServiceNames(rawFeedbacks);
+      } catch (_) {
+        serviceNames = const <int, String>{};
+      }
+
       return OrderInbox(
-        consultations: _parseConsultations(body['feedbacks']),
+        consultations: _parseConsultations(rawFeedbacks, serviceNames),
         orders: _parseOrders(body['orders']),
       );
     } catch (error, stackTrace) {
@@ -58,17 +68,21 @@ class HttpOrderRepository implements OrderRepository {
     }
   }
 
-  List<ConsultationItem> _parseConsultations(dynamic raw) {
-    final list = _asList(raw);
+  List<ConsultationItem> _parseConsultations(
+    List<dynamic> raw,
+    Map<int, String> serviceNames,
+  ) {
     final result = <ConsultationItem>[];
-    for (final entry in list) {
+    for (final entry in raw) {
       final map = _asMap(entry);
       if (map == null) continue;
+      final serviceId = _asInt(map['service_id']);
       result.add(ConsultationItem(
         feedbackNo: _asString(map['feedback_no']),
-        serviceName: _consultationTitle(map),
+        serviceName: serviceNames[serviceId] ?? '服務諮詢',
         submittedAt: _asDate(map['cre_time']),
         status: _feedbackStatusText(_asString(map['status'], fallback: '0')),
+        feedbackContent: _parseFeedbackContent(map['feedback_content']),
       ));
     }
     return result;
@@ -91,6 +105,7 @@ class HttpOrderRepository implements OrderRepository {
         finalAmount: _asNum(map['final_amount']),
         orderTime: _asDate(map['order_time']),
         serviceName: lineItems.isNotEmpty ? lineItems.first.itemName : '服務訂單',
+        vendorName: _asString(map['vendor_name']),
         contactMobile: _asString(map['contact_mobile']),
         commentStatus: _asString(map['comment_status'], fallback: '01'),
         review: _parseReview(map['review']),
@@ -104,6 +119,7 @@ class HttpOrderRepository implements OrderRepository {
         serviceTime: _optionalDate(map['service_time']),
         completeTime: _optionalDate(map['complete_time']),
         cancelTime: _optionalDate(map['cancel_time']),
+        vendorDataContent: _parseVendorDataContent(map['vendor_data']),
       ));
     }
     return result;
@@ -140,9 +156,51 @@ class HttpOrderRepository implements OrderRepository {
     return result;
   }
 
-  String _consultationTitle(Map<String, dynamic> feedback) {
-    final name = _asString(feedback['contact_name']);
-    return name.isNotEmpty ? name : '服務諮詢';
+  /// 批次呼叫 `/app-api/forms/{form_id}/full` 取得表單名稱作為服務名稱。
+  ///
+  /// feedback 一定有 `form_id`（建立時必填），用它去查表單名稱比
+  /// `/services/{id}/form/full` 可靠（後者在 `form_id` 為 NULL 時會 404）。
+  Future<Map<int, String>> _fetchServiceNames(List<dynamic> feedbacks) async {
+    final formIds = <int>{};
+    final serviceIdToFormId = <int, int>{};
+    for (final entry in feedbacks) {
+      final map = _asMap(entry);
+      if (map == null) continue;
+      final sid = _asInt(map['service_id']);
+      final fid = _asInt(map['form_id']);
+      if (sid > 0 && fid > 0) {
+        formIds.add(fid);
+        serviceIdToFormId[sid] = fid;
+      }
+    }
+
+    // form_id → form name
+    final formNameCache = <int, String>{};
+    for (final fid in formIds) {
+      try {
+        final resp = await _client.get<dynamic>(
+          '/app-api/forms/$fid/full',
+        );
+        final data = _asMap(resp.data);
+        final form = _asMap(data?['form']);
+        final name = _asString(form?['name']);
+        if (name.isNotEmpty) {
+          formNameCache[fid] = name;
+        }
+      } catch (_) {
+        // 略過
+      }
+    }
+
+    // service_id → form name
+    final result = <int, String>{};
+    for (final entry in serviceIdToFormId.entries) {
+      final name = formNameCache[entry.value];
+      if (name != null) {
+        result[entry.key] = name;
+      }
+    }
+    return result;
   }
 
   OrderReview? _parseReview(dynamic raw) {
@@ -163,6 +221,77 @@ class HttpOrderRepository implements OrderRepository {
       '2' => '已完成',
       _ => '未知',
     };
+  }
+
+  /// 從 `vendor_data` JSONB 取出 `content` 欄位（接單時打包的可讀多行文字）。
+  String _parseVendorDataContent(dynamic raw) {
+    final map = _asMap(raw);
+    if (map == null) return '';
+    return _asString(map['content']);
+  }
+
+  /// 從 `feedback_content` JSONB 解析出可讀文字。
+  ///
+  /// 新版格式 `{answers: [...], form_id}` 會把每個答案的 `value` 串接；
+  /// 舊版格式（直接是字串）直接回傳；其餘格式把最外層 key-value 展平。
+  String _parseFeedbackContent(dynamic raw) {
+    if (raw == null) return '';
+    if (raw is String) return raw;
+    final map = _asMap(raw);
+    if (map == null) return '';
+
+    // 新版格式：{ answers: [...], form_id }
+    final answers = _asList(map['answers']);
+    if (answers.isNotEmpty) {
+      final lines = <String>[];
+      for (final ans in answers) {
+        final ansMap = _asMap(ans);
+        if (ansMap == null) continue;
+        final title = _asString(ansMap['title']);
+        final value = _asString(ansMap['value']);
+        // 有些 answer 只有 optionIds / optionNames
+        final optionNames = _asList(ansMap['optionNames']);
+        if (title.isNotEmpty && value.isNotEmpty) {
+          lines.add('$title：$value');
+        } else if (title.isNotEmpty && optionNames.isNotEmpty) {
+          lines.add('$title：${optionNames.map((o) => _asString(o)).join('、')}');
+        } else if (value.isNotEmpty) {
+          lines.add(value);
+        }
+      }
+      return lines.join('\n');
+    }
+
+    // 舊版格式：{ data: [...] }
+    final data = _asList(map['data']);
+    if (data.isNotEmpty) {
+      final lines = <String>[];
+      for (final topic in data) {
+        final topicMap = _asMap(topic);
+        if (topicMap == null) continue;
+        final title = _asString(topicMap['title']);
+        final answerList = _asList(topicMap['answerList']);
+        final values = answerList
+            .map((a) => _asString(_asMap(a)?['value']))
+            .where((v) => v.isNotEmpty)
+            .toList();
+        if (title.isNotEmpty && values.isNotEmpty) {
+          lines.add('$title：${values.join('、')}');
+        } else if (values.isNotEmpty) {
+          lines.add(values.join('、'));
+        }
+      }
+      return lines.join('\n');
+    }
+
+    // 退路：展平最外層 key-value
+    final lines = <String>[];
+    for (final entry in map.entries) {
+      if (entry.key == 'form_id' || entry.key == 'calculations') continue;
+      final text = _asString(entry.value);
+      if (text.isNotEmpty) lines.add('${entry.key}：$text');
+    }
+    return lines.join('\n');
   }
 
   // === 容錯轉型工具 ===

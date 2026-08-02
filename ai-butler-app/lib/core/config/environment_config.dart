@@ -35,7 +35,8 @@ class EnvironmentConfig {
   final String baseUrl;
 
   /// 預設的真實 API base URL（比賽現場用）。
-  static const String defaultRemoteUrl = 'http://52.10.163.115:8100';
+  static const String defaultRemoteUrl =
+      'https://d2zjm4bnq2dedx.cloudfront.net';
 
   /// 訪客瀏覽開關（Requirement 2.10，預設 false）。
   final bool guestBrowsing;

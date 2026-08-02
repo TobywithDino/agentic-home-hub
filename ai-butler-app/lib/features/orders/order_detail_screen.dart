@@ -74,6 +74,8 @@ class _OrderDetail extends StatelessWidget {
               ],
             ),
             const SizedBox(height: AppSpacing.xs),
+            if (order.vendorName.isNotEmpty)
+              _KeyValue(label: '服務商', value: order.vendorName),
             _KeyValue(label: '訂單編號', value: order.orderNo),
             _KeyValue(label: '成立時間', value: dateFormat.format(order.orderTime)),
             if (order.depositTime != null)
@@ -94,29 +96,16 @@ class _OrderDetail extends StatelessWidget {
         ),
         const SizedBox(height: AppSpacing.md),
 
-        // === 訂單品項（依 order_items JSON 呈現） ===
+        // === 金額 ===
         _Section(
           children: <Widget>[
-            const Text('訂單品項', style: AppTypography.title),
+            const Text('金額', style: AppTypography.title),
             const SizedBox(height: AppSpacing.xs),
-            if (order.lineItems.isEmpty)
-              Text(
-                '此訂單沒有品項明細',
-                style: AppTypography.body
-                    .copyWith(color: context.butler.secondaryText),
-              )
-            else
-              for (final item in order.lineItems) _LineItemRow(item: item),
-            const Divider(height: AppSpacing.lg),
-            _AmountRow(
-              label: '品項合計',
-              amount: order.lineItemsTotal ??
-                  order.lineItems.fold<num>(0, (sum, i) => sum + i.itemAmount),
+            Text(
+              'NT\$${_fmt(order.finalAmount)}',
+              style: AppTypography.bodyLarge
+                  .copyWith(color: Theme.of(context).colorScheme.primary),
             ),
-            if (order.depositAmount > 0)
-              _AmountRow(label: '訂金', amount: order.depositAmount),
-            _AmountRow(
-                label: '實付金額', amount: order.finalAmount, emphasize: true),
           ],
         ),
 
@@ -127,6 +116,18 @@ class _OrderDetail extends StatelessWidget {
               const Text('備註', style: AppTypography.title),
               const SizedBox(height: AppSpacing.xs),
               Text(order.remark, style: AppTypography.body),
+            ],
+          ),
+        ],
+
+        // === 原始諮詢內容（vendor_data.content）===
+        if (order.vendorDataContent.isNotEmpty) ...<Widget>[
+          const SizedBox(height: AppSpacing.md),
+          _Section(
+            children: <Widget>[
+              const Text('內容', style: AppTypography.title),
+              const SizedBox(height: AppSpacing.xs),
+              Text(order.vendorDataContent, style: AppTypography.body),
             ],
           ),
         ],
@@ -186,91 +187,6 @@ class _OrderDetail extends StatelessWidget {
   void _openReview(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => ReviewScreen(order: order)),
-    );
-  }
-}
-
-/// 單一品項：名稱 + 單價描述 + attribute 條列 + 小計。
-class _LineItemRow extends StatelessWidget {
-  const _LineItemRow({required this.item});
-
-  final OrderLineItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Expanded(
-                child: Text(item.itemName, style: AppTypography.bodyLarge),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text('NT\$${_fmt(item.itemAmount)}',
-                  style: AppTypography.bodyLarge),
-            ],
-          ),
-          if (item.unitPriceLabel.isNotEmpty)
-            Text(
-              item.unitPriceLabel,
-              style: AppTypography.caption
-                  .copyWith(color: context.butler.secondaryText),
-            ),
-          for (final attribute in item.attributes)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text('· ',
-                      style: AppTypography.caption
-                          .copyWith(color: context.butler.secondaryText)),
-                  Expanded(
-                    child: Text(
-                      attribute,
-                      style: AppTypography.caption
-                          .copyWith(color: context.butler.secondaryText),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AmountRow extends StatelessWidget {
-  const _AmountRow({
-    required this.label,
-    required this.amount,
-    this.emphasize = false,
-  });
-
-  final String label;
-  final num amount;
-  final bool emphasize;
-
-  @override
-  Widget build(BuildContext context) {
-    final style = emphasize
-        ? AppTypography.bodyLarge
-            .copyWith(color: Theme.of(context).colorScheme.primary)
-        : AppTypography.body;
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: <Widget>[
-          Text(label, style: style),
-          Text('NT\$${_fmt(amount)}', style: style),
-        ],
-      ),
     );
   }
 }

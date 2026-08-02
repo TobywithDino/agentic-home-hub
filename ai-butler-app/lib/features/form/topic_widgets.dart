@@ -23,6 +23,7 @@ class TopicFieldParams {
     required this.errorMessage,
     required this.onChanged,
     this.anchorKey,
+    this.maxCapacity,
   });
 
   final FormTopic topic;
@@ -35,6 +36,9 @@ class TopicFieldParams {
   /// 掛在題目最外層的容器上，讓光圈把「題目標題 + 輸入元件 + 錯誤訊息」
   /// 整塊圈起來，使用者才看得懂在講哪一題。非導覽情境傳 null 即可。
   final GlobalKey? anchorKey;
+
+  /// 餐廳訂位人數上限。不為 null 時，title 含「人數」的數字簡答題會提示此上限。
+  final int? maxCapacity;
 }
 
 Widget buildTopicWidget(BuildContext context, TopicFieldParams params) {
@@ -140,6 +144,8 @@ class _TextFieldState extends State<_TextField> {
   @override
   Widget build(BuildContext context) {
     final isLong = widget.params.topic.type == TopicType.longText;
+    final showCapacityHint = widget.params.maxCapacity != null &&
+        widget.params.topic.title.contains('人數');
     return TextField(
       controller: _controller,
       minLines: isLong ? 4 : 1,
@@ -147,6 +153,9 @@ class _TextFieldState extends State<_TextField> {
       keyboardType: widget.params.topic.isNumberOnly
           ? TextInputType.number
           : TextInputType.text,
+      decoration: InputDecoration(
+        hintText: showCapacityHint ? '上限 ${widget.params.maxCapacity} 人' : null,
+      ),
       onChanged: (value) => widget.params.onChanged(TextAnswer(value)),
     );
   }
