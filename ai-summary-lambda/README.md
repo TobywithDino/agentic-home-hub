@@ -11,7 +11,7 @@
 | Lambda Function | `aiwave-review-summary` |
 | Region | `us-west-2` |
 | Runtime | Python 3.12 |
-| Bedrock Model | `us.anthropic.claude-sonnet-4-5-20250929-v1:0`（Claude Sonnet 4.5，cross-region inference profile） |
+| Bedrock Model | `us.anthropic.claude-sonnet-4-6`（Claude Sonnet 4.6，cross-region inference profile） |
 | Function URL | `https://octoney4t6vv6yzf537lxehkju0ekvds.lambda-url.us-west-2.on.aws/`（workshop SCP 封鎖，無法直接 curl，改用 CLI invoke） |
 | EventBridge 排程 | `aiwave-review-summary-weekly`，每週一 UTC 01:00（台灣時間 09:00） |
 
@@ -43,17 +43,17 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
         │
         ├── GET /merchant-api/services              ←─── bff_server :8100
         ├── GET /merchant-api/vendors               ←─── bff_server :8100
-        │       (拉取全平台服務項目 / 商家清單)
+        │       (拉取全平台服務項目 / 商家清單，含名稱對照表)
         │
         ├── GET /app-api/services/{id}/reviews      ←─── bff_server :8100
-        │       (消費者視角：依服務項目拉評價)
+        │       (消費者視角：依服務項目拉全部評價)
         │
         ├── GET /merchant-api/vendors/{id}/reviews  ←─── bff_server :8100
-        │       (商家視角：跨服務項目拉評價，篩近一週)
+        │       (商家視角：跨服務項目拉評價，Lambda 側篩近 7 天)
         │
-        ├── prompts.py → 組裝 prompt
+        ├── prompts.py → 組裝 prompt（服務名稱取代 service_id）
         │
-        ├── Amazon Bedrock（Claude Sonnet 4.5）
+        ├── Amazon Bedrock（Claude Sonnet 4.6）
         │       呼叫 Converse API
         │
         ├── PUT /merchant-api/services/{id}/review-summary  →── bff_server :8100
@@ -114,6 +114,8 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 
 ### 3. 組裝 Prompt 與呼叫 Bedrock
 
+評價區塊中的服務名稱由 `service_names` dict 對照，LLM 看到的是實際名稱（如「冷氣清洗」）而非 `服務ID:1`。
+
 #### 消費者版（`build_consumer_prompt`）
 
 輸出純文字，對應前端服務詳情頁的「評價摘要」區塊：
@@ -129,12 +131,7 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 
 ```json
 {
-  "summary_points": [
-    "本週共收到 N 筆客戶評價，平均評分 X.X 分。",
-    "情緒分佈：正面 N 筆、中立 N 筆、負面 N 筆。",
-    "各面向平均：服務態度 X.X、整潔程度 X.X、準時程度 X.X。",
-    "其中 N 筆附有文字評論，可作為服務改善的具體參考。"
-  ],
+  "summary": "本週服務整體口碑穩健，顧客普遍對準時性與專業度給予肯定。",
   "suggestions": [
     "「服務態度」平均最低，建議優先改善此環節。",
     "N 筆中立評價最易透過細節優化轉為正面。",
@@ -150,11 +147,11 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 
 | UI 區塊 | JSON 欄位 | 規格 |
 |---|---|---|
-| 本週住戶需求 AI 摘要 | `summary_points` | 固定 4 點，每點 ≤20 字 |
-| 廠商營運與服務優化建議 | `suggestions` | 3~4 點，每點 ≤20 字 |
+| 本週住戶需求 AI 摘要 | `summary` | 一段字串，≤125 字 |
+| 廠商營運與服務優化建議 | `suggestions` | 3~4 點陣列，每點 ≤20 字 |
 | 客戶情緒/滿意度標籤 | `sentiment_stats` | 依 overall_rating：4~5=正面、3=中立、1~2=負面 |
 
-本週無評價時，`summary_points[0]` 為「本週尚無新評價資料。」，`suggestions` 給通用建議，`sentiment_stats` 全為 0。
+本週無評價時，`summary` 為「本週尚無新評價資料。」，`suggestions` 給通用建議，`sentiment_stats` 全為 0。
 
 ---
 
@@ -168,20 +165,33 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 
 ### 5. 解析與寫回 DB
 
-商家版 LLM 輸出經 `_parse_merchant_json` 解析後，寫入 `mms_review_summary_vendor`：
+#### 消費者摘要寫回 `mms_review_summary_service`
+
+| DB 欄位 | 內容 |
+|---|---|
+| `service_vendor_id` | 所屬商家 ID |
+| `service_name` | 服務項目名稱 |
+| `summary_content` | LLM 產生的純文字口碑摘要 |
+| `source_review_count` | 全部評價總數 |
+| `source_avg_rating` | 全部評價平均分 |
+| `generate_status` | `"02"`（已完成） |
+| `ai_model` | 使用的 model ID |
+
+#### 商家摘要寫回 `mms_review_summary_vendor`
+
+商家版 LLM 輸出經 `_parse_merchant_json` 解析後寫入：
 
 | DB 欄位 | 內容 |
 |---|---|
 | `summary_content` | `"分析期間：YYYY/MM/DD – YYYY/MM/DD"` |
-| `summary_highlights` | `{"summary_points": [...], "suggestions": [...]}` |
-| `sentiment_stats` | `{"positive": N, "neutral": N, "negative": N}` |
+| `vendor_name` | 商家名稱（頂層欄位） |
+| `summary_highlights` | `{"summary": "...(≤125字)", "suggestions": [...]}` |
+| `sentiment_stats` | `{"positive": N, "neutral": N, "negative": N}`（近一週統計） |
 | `service_breakdown` | 各服務項目的評價數與平均分（全部評價計算） |
 | `source_review_count` | 全部評價總數（用於 `is_stale` 判斷） |
 | `source_avg_rating` | 全部評價平均分 |
 | `generate_status` | `"02"`（已完成） |
 | `ai_model` | 使用的 model ID |
-
-消費者版純文字摘要寫入 `mms_review_summary_service`（`summary_content` 欄位）。
 
 ---
 
@@ -270,7 +280,7 @@ AWS Console → CloudWatch → Log groups → /aws/lambda/aiwave-review-summary
 | 變數 | 目前值 | 說明 |
 |---|---|---|
 | `BFF_BASE_URL` | `http://52.10.163.115:8100` | BFF server 位址，EC2 IP 變更時修改 |
-| `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model（需用 cross-region inference profile 格式） |
+| `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-6` | Bedrock model（需用 cross-region inference profile 格式） |
 | `BEDROCK_REGION` | `us-west-2` | Bedrock 服務 region |
 | `MAX_TOKENS` | `2048` | LLM 回覆最大 token 數 |
 
@@ -282,14 +292,15 @@ AWS Console → CloudWatch → Log groups → /aws/lambda/aiwave-review-summary
 
 ### Prompt 微調（`prompts.py`）
 
-修改後執行 `bash deploy_lambda.sh` 更新。
+修改後執行 `bash deploy_lambda.sh` 更新。詳細相依影響範圍見程式碼內說明。
 
 | 調整項目 | 位置 | 說明 |
 |---|---|---|
 | 消費者輸出段落 | `build_consumer_prompt` 內 `## 輸出格式要求` | 增減輸出欄位 |
-| 商家 JSON 結構 | `build_merchant_prompt` 內 `## 輸出格式要求` | 增減 JSON 欄位 |
-| 每點字數限制 | prompt 規則區 | 目前 ≤20 字 |
-| 評價格式 | `_format_reviews_for_prompt` | 調整送給 LLM 的評價欄位 |
+| 商家 JSON 結構 | `build_merchant_prompt` 內 `## 輸出格式要求` | 增減 JSON 欄位（同步更新 handler.py + docstring） |
+| summary 字數限制 | prompt 規則區 | 目前 ≤125 字 |
+| suggestions 字數限制 | prompt 規則區 | 目前每點 ≤20 字，3~4 點 |
+| 評價格式（服務名稱） | `_format_reviews_for_prompt` | 目前顯示服務名稱，可調整欄位 |
 | 近一週天數 | `handler.py` `_run_merchant_summaries` 的 `timedelta(days=7)` | 可改為 14 天等 |
 
 ### EventBridge 排程
