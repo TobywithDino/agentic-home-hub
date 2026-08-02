@@ -29,7 +29,33 @@ class SessionState:
     selected_vendor_id: int | None = None
     selected_service_id: int | None = None
     form: dict[str, Any] | None = None
+    proposals: list[dict[str, Any]] = field(default_factory=list)
     touched_at: float = field(default_factory=time.time)
+
+    # ------------------------------------------------------------------
+    # 已產生的草稿
+    #
+    # 沒有這份記錄的話模型會重複產生同一張草稿：工作集每輪都把「已取得的
+    # 表單 + 題目」渲染進系統提示，模型看到一份填好的表單、又被問新問題，
+    # 就會再呼叫一次 propose_submission。實測就是同一張諮詢單在對話裡出現兩次。
+    # ------------------------------------------------------------------
+    def find_proposal(self, signature: str) -> dict[str, Any] | None:
+        return next((p for p in self.proposals if p["signature"] == signature), None)
+
+    def remember_proposal(
+        self, kind: str, signature: str, summary: str, draft_id: str
+    ) -> None:
+        self.proposals.append(
+            {
+                "kind": kind,
+                "signature": signature,
+                "summary": summary,
+                "draft_id": draft_id,
+            }
+        )
+        # 只留最近幾張，避免長對話把提示撐大
+        self.proposals = self.proposals[-5:]
+        self.touched_at = time.time()
 
     def remember_vendors(self, service_type: str, vendors: list[dict[str, Any]]) -> None:
         self.vendors = [
@@ -91,7 +117,7 @@ class SessionState:
 
     def render(self) -> str:
         """渲染成系統提示用的文字。沒東西就回空字串，不要塞無意義的區塊。"""
-        if not self.vendors and not self.form and not self.orders:
+        if not self.vendors and not self.form and not self.orders and not self.proposals:
             return ""
 
         lines: list[str] = []
@@ -129,6 +155,19 @@ class SessionState:
                     f"- {o['order_no']}：record_id={o['record_id']}"
                     f"（{o['status_label']}，{mark}）"
                 )
+
+        if self.proposals:
+            labels = {
+                "feedback": "諮詢單",
+                "review": "訂單評價",
+                "profile": "個人資料",
+            }
+            lines.append(
+                "\n已經產生、正在等使用者確認的草稿"
+                "（卡片已經在畫面上，**不要重複產生**）："
+            )
+            for p in self.proposals:
+                lines.append(f"- {labels.get(p['kind'], p['kind'])}：{p['summary']}")
 
         return "\n## 本次對話已確認的資料\n" + "\n".join(lines) + "\n"
 

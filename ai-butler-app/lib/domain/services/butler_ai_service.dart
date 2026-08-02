@@ -34,6 +34,10 @@ class VendorCard extends ButlerChunk {
 }
 
 /// 表單預填確認卡（Requirement 13.5-6）。
+///
+/// 對應 agent 的 `kind=feedback` 草稿。使用者可以選「直接送出」或
+/// 「帶我操作一遍」—— 後者會進表單頁跑光圈導覽，所以這張卡必須帶著
+/// 逐題答案，不能只帶一個數量。
 class PrefillCard extends ButlerChunk {
   const PrefillCard({
     required this.serviceId,
@@ -41,12 +45,59 @@ class PrefillCard extends ButlerChunk {
     required this.filledCount,
     required this.remainingRequired,
     required this.summary,
+    this.draftId = '',
+    this.vendorId = 0,
+    this.serviceType = '',
+    this.answers = const <int, String>{},
+    this.payload = const <String, dynamic>{},
+    this.submitMethod = 'POST',
+    this.submitPath = '',
   });
+
   final int serviceId;
   final int formId;
   final int filledCount;
   final int remainingRequired;
   final String summary;
+
+  final String draftId;
+
+  /// 服務商 ID。跨畫面導覽要靠它在服務商列表圈出正確那一張卡。
+  final int vendorId;
+
+  /// 服務類型代碼（`cms_homepage_service.type`），agent 給的是未補零的
+  /// `'1'`..`'11'`。要拿去打 API 就用這個原始值。
+  final String serviceType;
+
+  /// 補零後的服務類型，用來跟畫面上的服務類別比對。
+  ///
+  /// **比對時務必兩邊都套 [normalizeServiceType]。** App 裡兩個資料來源的
+  /// 格式並不一致：`mock_seed_data.dart` 用補零的 `'01'`..`'11'`，而
+  /// `http_vendor_repository.dart` 直接用 API 要的未補零 `'1'`..`'11'`
+  /// （`ServiceCategory.type` 的註解只對 mock 成立）。只正規化其中一邊，
+  /// 換一個資料來源就會比不到 —— 實測踩過：接真實後端後導覽在首頁就中斷。
+  String get normalizedServiceType => normalizeServiceType(serviceType);
+
+  /// 把 `'6'` / `'06'` 統一成兩位數形式。
+  static String normalizeServiceType(String raw) {
+    final trimmed = raw.trim();
+    return trimmed.length == 1 ? '0$trimmed' : trimmed;
+  }
+
+  /// `topic_id` → 管家整理出的答案文字。
+  ///
+  /// 型別是字串而不是 `AnswerValue`：agent 端的 `feedback_content` 就是字串
+  /// （它不知道 App 的作答模型），轉成型別化作答值是
+  /// `DraftPrefillMapper` 的工作。
+  final Map<int, String> answers;
+
+  /// agent 草稿的原始 payload，含 `contact_name`/`contact_mobile` 等
+  /// 不屬於某一題的頂層欄位，以及「直接送出」要原樣轉送的內容。
+  final Map<String, dynamic> payload;
+
+  /// 「直接送出」要打的端點。
+  final String submitMethod;
+  final String submitPath;
 }
 
 /// 非表單類的草稿確認卡（訂單評價、個人資料）。

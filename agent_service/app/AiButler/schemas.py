@@ -156,6 +156,10 @@ class OrderDraft:
     service_id: int | None = None
     service_type: str | None = None
     form_id: int | None = None
+    # App 的「帶我操作一遍」導覽要從首頁走到這家商家，所以草稿得記住它。
+    # payload 裡沒有 vendor_id（建 feedback 只需要 service_id），
+    # 但導覽需要在服務商列表圈出正確那一張卡。
+    vendor_id: int | None = None
     draft_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: float = field(default_factory=time.time)
     ttl_seconds: int = 600
@@ -177,6 +181,7 @@ class OrderDraft:
                 else ""
             ),
             "form_id": self.form_id,
+            "vendor_id": self.vendor_id,
             "submit": {"method": self.submit_method, "path": self.submit_path},
             "payload": self.payload,
             "summary": self.summary,

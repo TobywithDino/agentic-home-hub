@@ -58,6 +58,12 @@ agentic-home-hub/
 ├── ai-butler-app/            隊友負責：Flutter APP 本體（含 AI 管家聊天畫面）
 │   └── lib/
 │       ├── data/remote/http_butler_ai_service.dart  打 bff_server 的 SSE，映射成 ButlerChunk
+│       ├── data/remote/sse_client*.dart             條件 import：Web 走 fetch_client 才有真串流
+│       ├── domain/logic/draft_prefill_mapper.dart   管家草稿的字串答案 → sealed AnswerValue
+│       ├── features/butler_chat/draft_action_sheet.dart 「直接送出 / 帶我操作一遍」分叉點
+│       ├── features/tour/                           跨畫面光圈導覽（首頁→列表→詳情→填單）
+│       │                                            anchors 是全域 GlobalKey 登記表，session 是 leg 狀態機
+│       ├── providers/butler_draft_provider.dart     把草稿從聊天室交棒到表單頁
 │       └── providers/ai_providers.dart              AI_SOURCE=remote 時切換到上面那支
 ├── ai-summary-lambda/        隊友負責：評論摘要 Lambda（Bedrock 產生 mms_review_summary）
 ├── vendor-admin-web/         隊友負責：商家後台前端（React + Vite + Tailwind）
@@ -225,12 +231,23 @@ agentcore logs               # 看 runtime 日誌
   `ai-butler-app/lib/domain/services/butler_ai_service.dart`（`ButlerChunk` 子型別）。
   `ButlerChunk` 是 sealed class，漏改的話 `butler_chat_screen.dart` 的 switch 會編譯失敗 —— 這是好事，讓漏改變成編譯錯誤而不是執行時默默丟掉卡片。
 - **APP 端的草稿卡分兩種**：`feedback` 有表單可以帶使用者去填，映射成既有的 `PrefillCard`（點擊進 `/forms/{id}`）；`review`/`profile` 沒有表單，映射成 `DraftCard`（點擊分別進 `/orders`、`/account`）。不認得的 `kind` 一律走 `DraftCard` 而不是丟掉，使用者至少看得到摘要。
-- **導覽功能（「帶我操作一遍」）還沒做**，`flutter_ai_script/lib/agent/` 有參考實作待併入。開工前先知道這些落差：
-  1. `ai-butler-app` 的 `pubspec.yaml` **沒有** `tutorial_coach_mark`，要先加
-  2. 草稿卡目前只是 `context.push` 到某個畫面，**還沒有「直接送出 / 帶我操作」的兩顆按鈕分叉**（參考 `draft_action_card.dart`）
-  3. `tour.dart` 的 `tourBlueprints` 路由寫的是 `/reservation/new` / `/laundry/new`，那是舊原型的路徑；`ai-butler-app` 實際只有 `/forms/{formId}` 一個通用填單頁，藍圖要改成對應題目而不是對應畫面
-  4. 導覽要靠 `GlobalKey` 錨點抓到真實 widget，但 `ai-butler-app` 目前的 `GlobalKey` 只有表單驗證與 router 在用，錨點註冊要從頭加到 `topic_widgets.dart` 那些題型元件上
-  5. 預填由表單頁自己在 `initState` 讀 `prefill` 完成，導覽只負責解說 —— 不要讓導覽逐欄位寫值，使用者中途改的值會被覆蓋回去
+- **「帶我操作一遍」導覽已實作,且是從首頁開始的跨畫面導覽**（`ai-butler-app/lib/features/tour/`，用 `tutorial_coach_mark 1.3.3`）。完整路徑：點諮詢單草稿卡 → `draft_action_sheet.dart` 跳出「直接送出 / 帶我操作一遍」→ 選導覽就 `tourSessionProvider.start(card)` 並 `context.go` 首頁 → **首頁分類磚 → 服務商列表那一家 → 商家詳情的填寫諮詢單 → 填單頁逐題 → 送出**。刻意不直接跳到填單頁：那樣使用者只學到怎麼填表，不知道這張表單在 App 的哪裡、下次怎麼自己走到。跨畫面的機制：
+  - `tour_anchors.dart` 是**全域共用的 GlobalKey 登記表**（provider，刻意不 autoDispose）。導覽橫跨四個畫面，錨點若由各畫面自己持有，產生步驟的地方就拿不到別的畫面的錨點。id 一律用 `TourAnchorIds` 的函式產生，打錯字會安靜跳過那一步。
+  - `tour_session.dart` 是 `TourLeg`（home/vendorList/vendorDetail）狀態機。`started` 旗標防止重複彈光圈 —— 畫面的 build 會因資料載入/捲動/鍵盤重跑多次。`advanceTo` 一定要重置 `started`。
+  - `tour_leg_host.dart` 的 `maybeStartTourLeg` 是三個導航畫面共用的啟動邏輯（檢查輪到自己 → 標記 → postFrame 啟動）。錨點還沒掛上就結束 session，不要讓使用者對著永遠不出現的光圈等。
+  - **導航必須由 `TourStep.onTap` 自己執行,不能靠點擊穿透**。`tutorial_coach_mark` 會在光圈區域蓋 GestureDetector 攔截點擊，底下真正的 widget 收不到。而且 `onClickTarget` 是 `TutorialCoachMark` 的**全域** callback（不是 `TargetFocus` 的欄位），要靠 `TargetFocus.identify` 分派回對應的步驟。
+  - 導航步驟**不顯示「下一步」按鈕**（`TourStep.requiresTap`）。按了會跳步但畫面沒切換，導覽就錯位。
+  - 商家詳情那一段是跨畫面導覽與填單頁導覽的接縫：`onTap` 設定 `pendingButlerDraftProvider(startTour: true)` 並 `finish()` session，由 `FormScreen` 接手（它要等表單載入、預填算完才知道有哪些題目）。
+  - 草稿的 `vendor_id` 是為導覽而加的（`schemas.py` 的 `OrderDraft`）：建 feedback 只需要 `service_id`，但導覽要在服務商列表圈出正確那張卡。`service_type` 要補零才能對上 `ServiceCategory.type`（agent 給 `'6'`，App 是 `'06'`），用 `PrefillCard.normalizedServiceType`。
+  填單頁那一段的設計：
+  1. **導覽步驟由 `TourPlan.forForm` 當場從 `FormDefinition` 生成，不寫死「服務類型→藍圖」對照表**。表單是動態的、全 App 只有一個通用填單頁，寫死藍圖等於題目一改導覽就指錯位置。新增服務類型不用改導覽。
+  2. **預填走 `DraftPrefillMapper`，原則是寧缺勿錯**。agent 的 `feedback_content` 一律是字串，但 App 用 sealed `AnswerValue`（單選要 `option_id` 不是 `option_name`、日期要 `DateTime`、地區要區碼）。轉不出來的進 `unresolved`，導覽會改口說「這題請你自己選」——硬塞一個猜的值使用者不會注意到，直接送出就錯了。地區與照片題目前一律進 `unresolved`。
+  3. **預填由表單頁做，導覽只解說**。讓導覽逐欄位寫值的話，使用者在導覽中途自己改的內容會被下一步覆蓋回去。
+  4. **最後一步一定是送出鈕且 `handOff: true`**，由使用者親手按。管家全程沒有寫入權限，這是那個原則在 UI 上的體現。
+  5. **「直接送出」不原樣轉送 agent 的 payload**，而是先取表單定義、走一次跟 GUI 完全相同的「型別化作答 → `FormAnswerSerializer` → `FormValidator`」流程。否則 agent 與 GUI 會往同一張表寫兩種結構的 `feedback_content`，且缺必填的單子會被送出去。驗證不過就擋下來並引導使用者改走導覽。
+  6. 錨點靠 `TopicFieldParams.anchorKey`（掛在題目最外層容器）與送出鈕的 key。`GlobalKey` 由 `_FormScreenState` 持有，不能每次 build 重建，否則導覽跑到一半會找不到 widget。
+  7. `TourRunner` 會先濾掉 `currentContext == null` 的步驟 —— 那代表 widget 還沒掛載（被捲出視野），套件不會容錯而是直接崩。
+  純邏輯部分有測試：`test/domain/draft_prefill_mapper_test.dart`、`tour_plan_test.dart`、`tour_nav_leg_test.dart`、`tour_session_test.dart`。
 - **bff_server 是原樣轉發 SSE，不重新組裝**。agent 端已經是 `data: {...}\n\n` 格式，重組只會讓兩邊協定不同步。
 - **前端切 SSE 不能靠 chunk 邊界**。TCP 會任意切割位元組，`http_butler_ai_service.dart` 的 `_sseLines` 用緩衝區累積到換行才算一行；把每個 chunk 當一筆事件會隨機解析失敗。
 - AI 管家的 `receiveTimeout` 要放寬到分鐘級（目前 3 分鐘）。`ApiClient` 預設 20 秒，但模型思考加多次 tool 往返很容易超過，所以那支 service 用自己的 Dio 實例。

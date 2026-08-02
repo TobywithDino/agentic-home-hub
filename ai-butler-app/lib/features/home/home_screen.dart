@@ -8,6 +8,11 @@ import 'package:ai_butler_app/design_system/components/service_category_tile.dar
 import 'package:ai_butler_app/design_system/components/skeletons.dart';
 import 'package:ai_butler_app/design_system/theme_extensions.dart';
 import 'package:ai_butler_app/domain/models/domain_models.dart';
+import 'package:ai_butler_app/domain/services/butler_ai_service.dart';
+import 'package:ai_butler_app/features/tour/tour_anchors.dart';
+import 'package:ai_butler_app/features/tour/tour_leg_host.dart';
+import 'package:ai_butler_app/features/tour/tour_plan.dart';
+import 'package:ai_butler_app/features/tour/tour_session.dart';
 import 'package:ai_butler_app/providers/catalog_providers.dart';
 import 'package:ai_butler_app/providers/session_providers.dart';
 import 'package:ai_butler_app/router/routes.dart';
@@ -24,6 +29,11 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final categoriesAsync = ref.watch(serviceCategoriesProvider);
     final authState = ref.watch(authNotifierProvider);
+    // 必須 watch（不是 read）：首頁是 StatefulShellRoute.indexedStack 的分頁，
+    // 四個分頁會一直保持已建置狀態，切回首頁只是換 IndexedStack 的 index，
+    // 不會重新 build。少了這行，AI 管家啟動導覽後首頁的 build 不會重跑，
+    // _maybeStartHomeTour 永遠不會被呼叫 —— 實測就是「跳到首頁但沒有導覽」。
+    ref.watch(tourSessionProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('AI 生活管家')),
@@ -72,7 +82,12 @@ class HomeScreen extends ConsumerWidget {
                     onRetry: () => ref.invalidate(serviceCategoriesProvider),
                   ),
                 ),
-                data: (categories) => _CategoryGrid(categories: categories),
+                data: (categories) {
+                  // 分類磚渲染完才能圈它，所以導覽在這裡啟動而不是在 build
+                  // 開頭 —— categoriesAsync 還在 loading 時錨點根本不存在。
+                  _maybeStartHomeTour(context, ref, categories);
+                  return _CategoryGrid(categories: categories);
+                },
               ),
             ),
           ],
@@ -80,6 +95,53 @@ class HomeScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// 啟動「帶我操作一遍」的第一段：圈出對應的服務類別磚。
+///
+/// 管家給的 `service_type` 是未補零的 `'6'`，而 [ServiceCategory.type] 是
+/// 兩位數 `'06'`，所以用 `normalizedServiceType` 比對。對不上（例如那個類別
+/// 目前沒有任何服務商而沒被列出來）就直接結束 session，不要讓使用者對著
+/// 一個永遠不會出現的光圈等。
+void _maybeStartHomeTour(
+  BuildContext context,
+  WidgetRef ref,
+  List<ServiceCategory> categories,
+) {
+  final session = ref.read(tourSessionProvider);
+  if (session == null || session.leg != TourLeg.home) return;
+
+  tourLog('首頁收到導覽請求，分類共 ${categories.length} 個');
+
+  final card = session.card;
+  final anchors = ref.read(tourAnchorsProvider);
+
+  maybeStartTourLeg(
+    ref: ref,
+    context: context,
+    leg: TourLeg.home,
+    buildSteps: () {
+      // 兩邊都正規化：真實 API 的分類是 '6'，mock 是 '06'，
+      // 只正規化其中一邊會在換資料來源時比不到。
+      final wanted = card.normalizedServiceType;
+      final target = categories
+          .where((c) => PrefillCard.normalizeServiceType(c.type) == wanted)
+          .firstOrNull;
+      if (target == null) {
+        tourLog('首頁找不到 service_type=$wanted 的分類'
+            '（現有：${categories.map((c) => c.type).join(",")}）');
+        return null;
+      }
+      return TourPlan.homeLeg(
+        categoryAnchor: anchors.of(TourAnchorIds.homeCategory(target.type)),
+        categoryName: target.name,
+        onTap: () {
+          ref.read(tourSessionProvider.notifier).advanceTo(TourLeg.vendorList);
+          context.push('${Routes.vendors}?serviceId=${target.serviceId}');
+        },
+      );
+    },
+  );
 }
 
 class _CategoryGrid extends StatelessWidget {
@@ -114,11 +176,17 @@ class _CategoryGrid extends StatelessWidget {
         childCount: categories.length,
         (context, index) {
           final category = categories[index];
-          return ServiceCategoryTile(
-            key: ValueKey<String>('category-${category.type}'),
-            category: category,
-            onTap: () => context.push(
-              '${Routes.vendors}?serviceId=${category.serviceId}',
+          return Consumer(
+            builder: (context, ref, _) => ServiceCategoryTile(
+              // 兼作 list 識別與導覽錨點。GlobalKey 由 TourAnchors 快取，
+              // 每次 build 都是同一個實例，不會破壞 grid 的 diff。
+              key: ref
+                  .read(tourAnchorsProvider)
+                  .of(TourAnchorIds.homeCategory(category.type)),
+              category: category,
+              onTap: () => context.push(
+                '${Routes.vendors}?serviceId=${category.serviceId}',
+              ),
             ),
           );
         },
