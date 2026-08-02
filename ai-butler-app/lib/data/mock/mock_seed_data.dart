@@ -396,6 +396,13 @@ class MockSeedData {
 
   static int _orderSeq = 0;
 
+  static final List<String> _mockVendorNames = <String>[
+    '好幫手清潔',
+    '快速水電行',
+    '美味餐廳',
+    '鮮食外送',
+  ];
+
   static OrderItem _order(String type, String status) {
     _orderSeq++;
     return OrderItem(
@@ -405,6 +412,7 @@ class MockSeedData {
       finalAmount: 100 * _orderSeq,
       orderTime: DateTime(2026, 7, 20).add(Duration(hours: _orderSeq)),
       serviceName: categories[_orderSeq % categories.length].name,
+      vendorName: _mockVendorNames[_orderSeq % _mockVendorNames.length],
       contactMobile: '0912345678',
     );
   }
