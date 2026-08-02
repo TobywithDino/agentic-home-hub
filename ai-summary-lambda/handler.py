@@ -142,6 +142,7 @@ def _run_consumer_summaries(only_service_id: str | None) -> list[dict]:
         # 寫回 DB（PUT /merchant-api/services/{service_id}/review-summary）
         _upsert_service_summary(
             service_id=service_id,
+            service_name=service_name,
             service_vendor_id=service_vendor_id,
             summary_text=summary_text,
             review_count=len(reviews),
@@ -475,6 +476,7 @@ def _parse_merchant_json(raw: str, vendor_id: int) -> dict:
 
 def _upsert_service_summary(
     service_id: int,
+    service_name: str,
     service_vendor_id: int | None,
     summary_text: str,
     review_count: int,
@@ -485,6 +487,7 @@ def _upsert_service_summary(
     url = f"{BFF_BASE_URL}/merchant-api/services/{service_id}/review-summary"
     body = {
         "service_vendor_id": service_vendor_id,
+        "service_name": service_name,
         "summary_content": summary_text,
         "source_review_count": review_count,
         "source_avg_rating": avg_rating,
