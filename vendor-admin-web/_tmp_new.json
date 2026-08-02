@@ -1,0 +1,36 @@
+{
+  "form": {
+    "service_vendor_id": 1,
+    "type": "1",
+    "sub_type": "1",
+    "name": "[測試] PATCH 健康表單驗證",
+    "intro_content": "用於驗證 PATCH 在正常表單上的行為",
+    "is_enable": "1"
+  },
+  "groups": [
+    {
+      "name": "第一題組",
+      "sort": 0,
+      "topics": [
+        {
+          "type": "1",
+          "title": "原始題目A",
+          "remark": null,
+          "is_required": "1",
+          "sort": 0
+        },
+        {
+          "type": "3",
+          "title": "原始題目B",
+          "remark": null,
+          "is_required": "0",
+          "sort": 1,
+          "options": [
+            { "option_name": "選項1", "unit_price": 0, "sort": 0 }
+          ]
+        }
+      ]
+    }
+  ],
+  "upd_id": "019fb652-df72-7992-989e-f456194edf8c"
+}

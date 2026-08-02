@@ -5,7 +5,10 @@
 export interface DashboardStats {
   todayConsultations: number
   pendingOrders: number
+  /** 本月服務收益：當月「已完成(80)」訂單的實付金額(final_amount)總和 */
   monthlyRevenue: number
+  /** 最近一筆訂單的時間（ISO）。當區間內無資料時，供 UI 顯示提示 */
+  latestOrderAt?: string
 }
 
 export interface OrderTrend {
@@ -31,6 +34,8 @@ export interface FormFeedback {
   content: string
   createdAt: string
   declineReason?: string
+  /** 所屬服務項目 ID（後端 service_id），供依服務篩選用 */
+  serviceId?: number
 }
 
 // ─── mms_order_record (訂單 - 成交後：正式交易與履約階段) ───
@@ -50,6 +55,30 @@ export interface OrderItem {
   quantity: number
 }
 
+/**
+ * 接單時打包進訂單 vendor_data 的原始諮詢內容
+ *
+ * 訂單本身只有金額與項目，缺少顧客當初填寫的客製化需求。
+ * 接單轉訂單時把諮詢單內容存進 vendor_data，商家出工前即可查閱。
+ */
+export interface OrderVendorData {
+  feedbackNo?: string
+  /** 當時的表單版本 id，供日後追溯題目結構 */
+  formId?: number
+  /** 已還原成「題目標題：答案」的多行文字 */
+  content?: string
+  /** 選擇題答案 */
+  selectedOptions?: string[]
+  contact?: {
+    name?: string
+    phone?: string
+    email?: string
+    address?: string
+  }
+  specialRequirements?: string
+  preferredContactTime?: string
+}
+
 export interface OrderRecord {
   id: string // order_no
   customerName: string
@@ -62,6 +91,10 @@ export interface OrderRecord {
   address: string
   phone: string
   orderItems: OrderItem[]
+  /** 所屬服務項目 ID（後端 service_id），供依服務篩選用 */
+  serviceId?: number
+  /** 接單時帶入的原始諮詢表單內容（後端 vendor_data） */
+  vendorData?: OrderVendorData
 }
 
 // ---------- Mock Data ----------
@@ -416,12 +449,36 @@ export interface CustomerFeedbackRecord {
   date: string
 }
 
+/** AI 摘要生成狀態 */
+export type SummaryGenerateStatus = '00' | '01' | '02' | '03'
+
+export const SUMMARY_STATUS_LABELS: Record<SummaryGenerateStatus, string> = {
+  '00': '待生成',
+  '01': '生成中',
+  '02': '已完成',
+  '03': '生成失敗',
+}
+
+/** 各服務的評價統計 */
+export interface ServiceReviewBreakdown {
+  serviceId: number
+  reviewCount: number
+  avgRating: number
+}
+
 export interface AiAnalysis {
-  /** 本週住戶需求 AI 摘要 (Key Takeaways) */
+  /**
+   * 本週回饋摘要（整段敘述）
+   *
+   * 後端已把 summary_highlights.summary_points（字串陣列）改為
+   * summary（單一字串）。有值時以段落呈現，比拆成假的編號清單更貼近原意。
+   */
+  summaryText?: string
+  /** 本週回饋摘要 (Key Takeaways)。舊版陣列格式與本地推導／Mock 使用 */
   summaryList: string[]
   /** 廠商營運與服務優化建議 */
   suggestions: string[]
-  /** 客戶情緒/滿意度分佈 (%) */
+  /** 客戶情緒/滿意度分佈 (%)，供進度條使用 */
   sentimentScore: {
     positive: number
     neutral: number
@@ -429,6 +486,34 @@ export interface AiAnalysis {
   }
   /** 分析資料涵蓋時間 */
   analyzedPeriod: string
+
+  // ─── 以下來自 GET /merchant-api/vendors/{id}/review-summary ───
+
+  /** 情緒分佈的原始筆數（非百分比） */
+  sentimentCounts?: {
+    positive: number
+    neutral: number
+    negative: number
+  }
+  /** 納入這份摘要的評價總筆數 */
+  sourceReviewCount?: number
+  /** 納入這份摘要的平均評分 */
+  sourceAvgRating?: number
+  /** 橫跨名下所有服務的評價統計 */
+  serviceBreakdown?: ServiceReviewBreakdown[]
+  /** 產生摘要所用的 AI 模型 */
+  aiModel?: string
+  generateStatus?: SummaryGenerateStatus
+  /** 摘要生成時間 */
+  generateTime?: string
+  /** generateStatus 為 '03' 時的錯誤訊息 */
+  errorMessage?: string | null
+  /** true 代表有新評價尚未納入這份摘要 */
+  isStale?: boolean
+  /** 最新一筆評價的時間 */
+  latestReviewAt?: string
+  /** 此份分析的來源：AI 摘要端點，或前端即時由評價推導 */
+  source?: 'ai-summary' | 'derived'
 }
 
 // 豐富的客戶歷史回饋假資料
@@ -646,4 +731,275 @@ export async function updateVendorServiceLabels(
   await delay(500)
   mockVendorLabelIds = [...labelIds]
   return { success: true, selectedIds: [...mockVendorLabelIds] }
+}
+
+// ─── 服務項目與表單結構（Service & Form Management）───
+
+/**
+ * 題目輸入類型
+ *
+ * 與後端 pms_form_topic.type 代碼一對一對應，避免來回轉換造成資訊遺失：
+ *   "1"=簡答  "2"=詳答  "3"=單選  "4"=複選  "5"=地區選單
+ *   "6"=照片  "7"=備註  "8"=聯絡資料  "9"=日期  "10"=聯絡資料(不含地址)
+ */
+export type FieldInputType =
+  | 'short_text'          // 1  簡答
+  | 'long_text'           // 2  詳答
+  | 'single_choice'       // 3  單選
+  | 'multi_choice'        // 4  複選
+  | 'region'              // 5  地區選單
+  | 'photo'               // 6  照片
+  | 'remark'              // 7  備註
+  | 'contact'             // 8  聯絡資料
+  | 'date'                // 9  日期
+  | 'contact_no_address'  // 10 聯絡資料(不含地址)
+
+/** 僅單選/複選題需要選項清單，其餘型別後端允許省略 options */
+export const TYPES_WITH_OPTIONS: FieldInputType[] = ['single_choice', 'multi_choice']
+
+/** 題目型別的中文顯示名稱（供表單編輯器下拉選單使用） */
+export const FIELD_INPUT_TYPE_LABELS: Record<FieldInputType, string> = {
+  short_text: '簡答',
+  long_text: '詳答',
+  single_choice: '單選',
+  multi_choice: '複選',
+  region: '地區選單',
+  photo: '照片上傳',
+  remark: '備註',
+  contact: '聯絡資料',
+  date: '日期',
+  contact_no_address: '聯絡資料(不含地址)',
+}
+
+/** 表單題目欄位 */
+export interface FormField {
+  id: string
+  label: string          // 欄位名稱／題目（對應後端 topic.title）
+  inputType: FieldInputType
+  required: boolean
+  placeholder?: string   // 對應後端 topic.remark
+  options?: string[]     // 供單選／複選使用（對應後端 option.option_name）
+  /**
+   * 後端 topic.id。存回時帶上代表「更新既有題目」，
+   * 不帶則後端視為新增。新建立的欄位為 undefined。
+   */
+  topicId?: number
+  /** 後端 topic.form_group_id，用於還原題目原本所屬的題組 */
+  groupId?: number
+}
+
+/** 題組中繼資料，用於儲存時還原原本的題組結構 */
+export interface FormGroupMeta {
+  id: number
+  name: string
+  sort: number
+}
+
+/** 表單主檔 */
+export interface ServiceForm {
+  id: number             // form_id
+  title: string          // 表單標題
+  description: string    // 表單說明
+  fields: FormField[]
+  createdAt: string
+  updatedAt: string
+  /**
+   * 原始題組結構。編輯器是平面欄位清單，儲存時需靠這份中繼資料
+   * 還原題組（否則多題組表單會被壓縮成單一題組）。
+   */
+  groups?: FormGroupMeta[]
+  /**
+   * 表單類型代碼（後端 form.type）。更新時後端要求必填，
+   * 因此需從讀取結果保留下來原樣回送。
+   */
+  type?: string
+  /** 表單子類型代碼（後端 form.sub_type），同樣為更新時必填 */
+  subType?: string
+}
+
+/** 服務項目（對應 cms_homepage_service）*/
+export interface VendorService {
+  id: number             // service_id
+  name: string           // 服務名稱
+  vendorId: number       // service_vendor_id
+  form: ServiceForm | null  // 目前綁定的表單（service.form_id），無則 null
+  /** 服務類型代碼（後端 type，如 "1"=居家清潔） */
+  type?: string
+  /** 共用同一張表單的服務數量（含自己）。0 代表尚未綁定表單 */
+  sharedFormCount?: number
+}
+
+// ---------- Mock 資料 ----------
+
+const mockVendorServices: VendorService[] = [
+  {
+    id: 101,
+    name: '居家清潔',
+    vendorId: 1,
+    form: {
+      id: 1001,
+      title: '居家清潔服務申請表',
+      description: '請填寫您的清潔需求，我們將盡快與您聯繫確認。',
+      fields: [
+        { id: 'f1', label: '聯絡資料', inputType: 'contact', required: true, placeholder: '姓名、電話、地址' },
+        { id: 'f2', label: '坪數', inputType: 'short_text', required: true, placeholder: '例：28' },
+        { id: 'f3', label: '清潔類型', inputType: 'single_choice', required: true, options: ['一般清潔', '深度清潔', '搬家清潔'] },
+        { id: 'f4', label: '希望服務地區', inputType: 'region', required: true },
+        { id: 'f5', label: '期望服務日期', inputType: 'date', required: false },
+        { id: 'f6', label: '特殊需求', inputType: 'long_text', required: false, placeholder: '例：有寵物、需使用環保清潔劑等' },
+      ],
+      createdAt: '2024-07-01 10:00',
+      updatedAt: '2024-07-15 14:30',
+    },
+  },
+  {
+    id: 102,
+    name: '冷氣維修',
+    vendorId: 1,
+    form: {
+      id: 1002,
+      title: '冷氣維修申請表',
+      description: '填寫冷氣故障狀況，技師將於收到後 2 小時內回覆。',
+      fields: [
+        { id: 'f1', label: '聯絡資料', inputType: 'contact_no_address', required: true, placeholder: '姓名、電話' },
+        { id: 'f2', label: '冷氣品牌', inputType: 'single_choice', required: true, options: ['大金', '日立', '三菱', '國際牌', '其他'] },
+        { id: 'f3', label: '故障狀況', inputType: 'multi_choice', required: true, options: ['不冷', '異味', '漏水', '異音', '無法開機'] },
+        { id: 'f4', label: '故障處照片', inputType: 'photo', required: false },
+        { id: 'f5', label: '偏好到府時間', inputType: 'remark', required: false, placeholder: '例：週末上午' },
+      ],
+      createdAt: '2024-07-01 10:00',
+      updatedAt: '2024-07-20 09:15',
+    },
+  },
+  {
+    id: 103,
+    name: '水電修繕',
+    vendorId: 1,
+    form: null,  // 尚未建立表單
+  },
+  {
+    id: 104,
+    name: '油漆粉刷',
+    vendorId: 1,
+    form: null,  // 尚未建立表單
+  },
+]
+
+let formIdCounter = 1010
+
+function generateFormId(): number {
+  return ++formIdCounter
+}
+
+function generateFieldId(): string {
+  return `f${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+}
+
+// ---------- Mock API 函式 ----------
+
+/** Mock 範例資料所屬的廠商 ID，作為找不到對應資料時的保底來源 */
+const FALLBACK_VENDOR_ID = 1
+
+/** 深拷貝單一服務，避免呼叫端直接改動 Mock 內部狀態 */
+function cloneService(s: VendorService, overrideVendorId?: number): VendorService {
+  return {
+    ...s,
+    vendorId: overrideVendorId ?? s.vendorId,
+    form: s.form
+      ? {
+          ...s.form,
+          fields: s.form.fields.map((f) => ({
+            ...f,
+            options: f.options ? [...f.options] : undefined,
+          })),
+        }
+      : null,
+  }
+}
+
+/**
+ * 取得該廠商旗下所有服務項目（含表單資料）
+ *
+ * 保底機制：若 Mock 中找不到該 vendorId 的資料（例如登入取得的
+ * service_vendor_id 不是 1），改用 FALLBACK_VENDOR_ID 的範例資料並
+ * 改寫 vendorId 為請求值，避免回傳空陣列導致整頁空白。
+ */
+export async function fetchVendorServices(vendorId: number): Promise<VendorService[]> {
+  await delay(500)
+  const owned = mockVendorServices.filter((s) => s.vendorId === vendorId)
+  if (owned.length > 0) {
+    return owned.map((s) => cloneService(s))
+  }
+  return mockVendorServices
+    .filter((s) => s.vendorId === FALLBACK_VENDOR_ID)
+    .map((s) => cloneService(s, vendorId))
+}
+
+/**
+ * 依 serviceId 取得 Mock 服務，找不到時就地建立一筆，
+ * 讓離線模式下的建立/更新操作不會拋錯中斷 UI。
+ */
+function findOrCreateMockService(serviceId: number): VendorService {
+  const existing = mockVendorServices.find((s) => s.id === serviceId)
+  if (existing) return existing
+
+  const created: VendorService = {
+    id: serviceId,
+    name: `服務 #${serviceId}`,
+    vendorId: FALLBACK_VENDOR_ID,
+    form: null,
+  }
+  mockVendorServices.push(created)
+  return created
+}
+
+/**
+ * 建立新表單並綁定至指定服務
+ */
+export async function createServiceForm(
+  serviceId: number,
+  data: { title: string; description: string; fields: Omit<FormField, 'id'>[] }
+): Promise<{ success: boolean; service: VendorService }> {
+  await delay(600)
+  const service = findOrCreateMockService(serviceId)
+
+  const now = getNowString()
+  service.form = {
+    id: generateFormId(),
+    title: data.title,
+    description: data.description,
+    fields: data.fields.map((f) => ({ ...f, id: generateFieldId() })),
+    createdAt: now,
+    updatedAt: now,
+  }
+  return { success: true, service: cloneService(service) }
+}
+
+/**
+ * 更新現有表單
+ *
+ * 保底機制：若該服務在 Mock 中尚無表單（或 formId 不符，例如 formId
+ * 來自真實 API），直接以傳入內容建立／覆寫，不拋錯。
+ */
+export async function updateServiceForm(
+  serviceId: number,
+  formId: number,
+  data: { title: string; description: string; fields: Omit<FormField, 'id'>[] }
+): Promise<{ success: boolean; service: VendorService }> {
+  await delay(600)
+  const service = findOrCreateMockService(serviceId)
+  const previousFields = service.form?.fields ?? []
+
+  service.form = {
+    id: service.form?.id ?? formId,
+    title: data.title,
+    description: data.description,
+    fields: data.fields.map((f, i) => ({
+      ...f,
+      id: previousFields[i]?.id ?? generateFieldId(),
+    })),
+    createdAt: service.form?.createdAt ?? getNowString(),
+    updatedAt: getNowString(),
+  }
+  return { success: true, service: cloneService(service) }
 }

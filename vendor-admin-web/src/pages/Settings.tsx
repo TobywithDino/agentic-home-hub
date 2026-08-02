@@ -2,18 +2,13 @@ import { useCallback, useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Toast } from '@/components/ui/toast'
-import {
-  getVendorProfile,
-  updateVendorProfile,
-  getVendorLabels,
-  updateVendorServiceLabels,
-  type VendorProfile,
-  type ServiceLabel,
-} from '@/api'
+import { getVendorProfile, updateVendorProfile, type VendorProfile } from '@/api'
 
 export default function Settings() {
   const [profile, setProfile] = useState<VendorProfile | null>(null)
   const [loading, setLoading] = useState(true)
+  /** 後端載入失敗（與「還在載入」區分，避免永遠卡在載入中） */
+  const [loadFailed, setLoadFailed] = useState(false)
   const [saving, setSaving] = useState(false)
   const [toastVisible, setToastVisible] = useState(false)
   const [toastMessage, setToastMessage] = useState('')
@@ -26,58 +21,56 @@ export default function Settings() {
   const [adminEmail, setAdminEmail] = useState('')
   const [newPassword, setNewPassword] = useState('')
 
-  // Service Labels
-  const [allLabels, setAllLabels] = useState<ServiceLabel[]>([])
-  const [selectedLabelIds, setSelectedLabelIds] = useState<number[]>([])
-
-  useEffect(() => {
-    async function load() {
-      const [profileData, labelsData] = await Promise.all([
-        getVendorProfile(),
-        getVendorLabels(),
-      ])
-      setProfile(profileData)
-      setName(profileData.name)
-      setDescription(profileData.description)
-      setAdminName(profileData.adminName)
-      setAdminPhone(profileData.adminPhone)
-      setAdminEmail(profileData.adminEmail)
-      setAllLabels(labelsData.allLabels)
-      setSelectedLabelIds(labelsData.selectedIds)
-      setLoading(false)
-    }
-    load()
+  /** 把後端 profile 套用到 state 與各欄位，載入與儲存後回讀共用 */
+  const applyProfile = useCallback((p: VendorProfile) => {
+    setProfile(p)
+    setName(p.name)
+    setDescription(p.description)
+    setAdminName(p.adminName)
+    setAdminPhone(p.adminPhone)
+    setAdminEmail(p.adminEmail)
   }, [])
 
-  const toggleLabel = (labelId: number) => {
-    setSelectedLabelIds((prev) =>
-      prev.includes(labelId)
-        ? prev.filter((id) => id !== labelId)
-        : [...prev, labelId]
-    )
-  }
+  // 此頁為廠商全覽層級：只處理商家屬性與管理帳號。
+  // 服務標籤已移至「服務表單管理」的各服務卡片，以 service_id 為範圍操作。
+  const load = useCallback(async () => {
+    setLoading(true)
+    setLoadFailed(false)
+    try {
+      // 抓不到資料時回 null（不再以假資料填欄位），改顯示重新載入
+      const p = await getVendorProfile()
+      if (p) applyProfile(p)
+      else setLoadFailed(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [applyProfile])
+
+  useEffect(() => {
+    load()
+  }, [load])
 
   const handleSave = async () => {
     setSaving(true)
     try {
-      const [profileResult, labelsResult] = await Promise.all([
-        updateVendorProfile({
-          name,
-          description,
-          adminName,
-          adminPhone,
-          adminEmail,
-          ...(newPassword ? { newPassword } : {}),
-        }),
-        updateVendorServiceLabels(selectedLabelIds),
-      ])
-      setProfile(profileResult.profile)
-      setSelectedLabelIds(labelsResult.selectedIds)
+      const profileResult = await updateVendorProfile({
+        name,
+        description,
+        adminName,
+        adminPhone,
+        adminEmail,
+        ...(newPassword ? { newPassword } : {}),
+      })
+      // 以後端回讀結果覆寫欄位，確保畫面與 DB 一致
+      if (profileResult.profile) applyProfile(profileResult.profile)
+
       setNewPassword('')
-      setToastMessage('商家標籤與設定已更新')
+      setToastMessage('商家資訊已儲存')
       setToastVisible(true)
     } catch {
-      // demo: silently ignore
+      // 寫入失敗不能顯示成功，明確告知使用者
+      setToastMessage('商家資訊儲存失敗，請稍後再試')
+      setToastVisible(true)
     } finally {
       setSaving(false)
     }
@@ -85,10 +78,26 @@ export default function Settings() {
 
   const handleToastClose = useCallback(() => setToastVisible(false), [])
 
-  if (loading || !profile) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
         <p className="text-slate-500">載入中...</p>
+      </div>
+    )
+  }
+
+  if (loadFailed || !profile) {
+    return (
+      <div className="space-y-6 max-w-3xl">
+        <h1 className="text-2xl font-bold text-slate-900">商家資訊設定</h1>
+        <Card>
+          <CardContent className="py-12 text-center space-y-4">
+            <p className="text-slate-500">無法載入商家資料，請確認後端服務是否正常。</p>
+            <Button variant="outline" onClick={load}>
+              重新載入
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -131,48 +140,6 @@ export default function Settings() {
               placeholder="請輸入商家描述"
               rows={4}
             />
-          </div>
-
-          {/* Service Labels Chips */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">
-              商家服務標籤
-            </label>
-            <p className="text-xs text-slate-400 mb-3">
-              點擊標籤進行勾選或取消勾選，已選取的標籤將顯示於您的服務頁面
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {allLabels.map((label) => {
-                const isSelected = selectedLabelIds.includes(label.id)
-                return (
-                  <button
-                    key={label.id}
-                    type="button"
-                    onClick={() => toggleLabel(label.id)}
-                    className={`
-                      inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium
-                      transition-all duration-150 border
-                      ${
-                        isSelected
-                          ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                          : 'bg-white text-slate-600 border-slate-300 hover:border-slate-400 hover:bg-slate-50'
-                      }
-                    `}
-                    aria-pressed={isSelected}
-                  >
-                    {isSelected && (
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
-                    {label.name}
-                  </button>
-                )
-              })}
-            </div>
-            <p className="text-xs text-slate-400 mt-2">
-              已選取 {selectedLabelIds.length} 個標籤
-            </p>
           </div>
         </CardContent>
       </Card>
@@ -257,3 +224,4 @@ export default function Settings() {
     </div>
   )
 }
+
