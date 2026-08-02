@@ -4,21 +4,35 @@ AI Review Summary Lambda Handler
 
 Lambda 入口。支援兩種觸發方式：
   1. EventBridge Scheduler（每週定時）：event 為空 dict 或帶 source="aws.scheduler"
-  2. API Gateway HTTP 手動觸發（demo 用）：event 帶 queryStringParameters
+  2. CLI invoke / Console Test（手動/demo 用）：event 頂層直接帶參數
 
 event 參數（皆為可選，不傳就跑全部）：
   - mode       : "consumer" | "merchant" | "all"（預設 "all"）
   - service_id : 只跑單一服務項目的消費者摘要（mode="consumer" 時有效）
   - vendor_id  : 只跑單一商家的商家摘要（mode="merchant" 時有效）
 
+兩種摘要視角：
+  consumer（寫入 mms_review_summary_service）
+    - 針對每個服務項目，分析全部評價，輸出純文字口碑摘要
+    - 寫回：PUT /merchant-api/services/{id}/review-summary
+
+  merchant（寫入 mms_review_summary_vendor）
+    - 針對每個商家，只分析近 7 天評價，輸出結構化 JSON：
+        summary_content:  分析期間字串
+        vendor_name:      商家名稱（頂層欄位）
+        summary_highlights: { summary（≤50字字串）, suggestions（3~4點陣列） }
+        sentiment_stats:  { positive, neutral, negative }
+    - 寫回：PUT /merchant-api/vendors/{id}/review-summary
+
 回傳 / log：
   - Lambda CloudWatch Logs 會印出每次 Bedrock 的完整回覆
-  - HTTP 觸發時額外把摘要結果回傳在 response body（方便 demo）
+  - CLI invoke 觸發時 response body 包含完整摘要結果（方便 demo）
 """
 
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 import boto3
 import httpx
@@ -128,6 +142,7 @@ def _run_consumer_summaries(only_service_id: str | None) -> list[dict]:
         # 寫回 DB（PUT /merchant-api/services/{service_id}/review-summary）
         _upsert_service_summary(
             service_id=service_id,
+            service_name=service_name,
             service_vendor_id=service_vendor_id,
             summary_text=summary_text,
             review_count=len(reviews),
@@ -151,13 +166,28 @@ def _run_consumer_summaries(only_service_id: str | None) -> list[dict]:
 def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
     """
     商家視角：針對每個商家產生跨服務項目的綜合摘要。
+    只使用近一週（7天）內的評價。
     若 only_vendor_id 有值，只跑該商家。
+
+    流程：
+    1. 拉商家清單（含名稱）
+    2. 拉全平台服務名稱對照表（供 prompt 顯示服務名稱而非 ID）
+    3. 拉該商家全部評價，篩選近 7 天
+    4. 呼叫 Bedrock 產生 JSON（summary / suggestions / sentiment_stats）
+    5. 計算聚合值（全部評價，供 is_stale 使用）
+    6. 寫回 DB
     """
     summaries = []
 
+    # 計算近一週時間範圍（UTC）
+    now_utc = datetime.now(timezone.utc)
+    week_ago = now_utc - timedelta(days=7)
+    week_start = week_ago.strftime("%Y/%m/%d")
+    week_end = now_utc.strftime("%Y/%m/%d")
+    week_ago_iso = week_ago.isoformat()
+
     if only_vendor_id:
         vendor_ids = [int(only_vendor_id)]
-        # 查實際商家名稱，避免 prompt 裡出現 "Vendor 1" 這種無意義佔位字
         _, vendor_names = _fetch_all_vendors(vendor_id_filter=int(only_vendor_id))
         if not vendor_names:
             vendor_names = {int(only_vendor_id): f"Vendor {only_vendor_id}"}
@@ -168,33 +198,56 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
         vendor_name = vendor_names.get(vendor_id, f"Vendor {vendor_id}")
         logger.info("[merchant] Processing vendor_id=%d name=%s", vendor_id, vendor_name)
 
-        reviews = _fetch_merchant_reviews(vendor_id)
-        if not reviews:
-            logger.info("[merchant] vendor_id=%d: no reviews, skipping", vendor_id)
-            continue
+        all_reviews = _fetch_merchant_reviews(vendor_id)
 
-        prompt = build_merchant_prompt(vendor_name, reviews)
-        summary_text = _call_bedrock(prompt)
+        # 拉取此商家的服務名稱對照表（用於 prompt 顯示服務名稱而非 ID）
+        _, _svc_names, _ = _fetch_all_services()
+        # 只保留屬於此商家的服務名稱（_fetch_all_services 拉全平台，過濾一下）
+        vendor_service_ids = {r.get("service_id") for r in all_reviews if r.get("service_id")}
+        service_names_for_prompt = {sid: _svc_names.get(sid, f"服務{sid}") for sid in vendor_service_ids}
+
+        # 篩選近一週的評價
+        recent_reviews = _filter_reviews_by_date(all_reviews, week_ago_iso)
+        logger.info(
+            "[merchant] vendor_id=%d: total=%d recent(7d)=%d",
+            vendor_id, len(all_reviews), len(recent_reviews),
+        )
+
+        # 近一週無評價時仍呼叫 LLM（讓 LLM 輸出「本週尚無新評價資料」的結構化回應）
+        prompt = build_merchant_prompt(vendor_name, recent_reviews, week_start, week_end, service_names_for_prompt)
+        raw_output = _call_bedrock(prompt)
 
         logger.info(
-            "[merchant] vendor_id=%d | review_count=%d\n%s\n%s\n%s",
+            "[merchant] vendor_id=%d | recent_count=%d\n%s\n%s\n%s",
             vendor_id,
-            len(reviews),
+            len(recent_reviews),
             "=" * 60,
-            summary_text,
+            raw_output,
             "=" * 60,
         )
 
-        # 計算寫回需要的聚合值
-        avg_rating = _calc_avg_rating(reviews)
-        latest_review_time = _calc_latest_review_time(reviews)
-        service_breakdown = _calc_service_breakdown(reviews)
+        # 解析 LLM 輸出的 JSON
+        parsed = _parse_merchant_json(raw_output, vendor_id)
+        summary = parsed.get("summary", "")
+        suggestions = parsed.get("suggestions", [])
+        sentiment_stats = parsed.get("sentiment_stats", {"positive": 0, "neutral": 0, "negative": 0})
 
-        # 寫回 DB（PUT /merchant-api/vendors/{vendor_id}/review-summary）
+        # 聚合值仍用全部評價計算（給 is_stale 判斷用），統計資料用近一週
+        avg_rating = _calc_avg_rating(all_reviews)
+        latest_review_time = _calc_latest_review_time(all_reviews)
+        service_breakdown = _calc_service_breakdown(all_reviews)
+
+        # 寫回 DB
         _upsert_vendor_summary(
             vendor_id=vendor_id,
-            summary_text=summary_text,
-            review_count=len(reviews),
+            vendor_name=vendor_name,
+            summary=summary,
+            suggestions=suggestions,
+            sentiment_stats=sentiment_stats,
+            week_start=week_start,
+            week_end=week_end,
+            recent_review_count=len(recent_reviews),
+            total_review_count=len(all_reviews),
             avg_rating=avg_rating,
             latest_review_time=latest_review_time,
             service_breakdown=service_breakdown,
@@ -204,8 +257,10 @@ def _run_merchant_summaries(only_vendor_id: str | None) -> list[dict]:
             "type": "merchant",
             "vendor_id": vendor_id,
             "vendor_name": vendor_name,
-            "review_count": len(reviews),
-            "summary": summary_text,
+            "recent_review_count": len(recent_reviews),
+            "summary": summary,
+            "suggestions": suggestions,
+            "sentiment_stats": sentiment_stats,
         })
 
     return summaries
@@ -390,10 +445,38 @@ def _calc_service_breakdown(reviews: list[dict]) -> list[dict]:
     ]
 
 
+def _filter_reviews_by_date(reviews: list[dict], since_iso: str) -> list[dict]:
+    """回傳 cre_time >= since_iso 的評價，用於篩選近一週資料。"""
+    result = []
+    for r in reviews:
+        cre_time = r.get("cre_time", "")
+        if cre_time and cre_time >= since_iso:
+            result.append(r)
+    return result
+
+
+def _parse_merchant_json(raw: str, vendor_id: int) -> dict:
+    """解析 LLM 輸出的 JSON 字串，失敗時回傳安全預設值。"""
+    try:
+        # LLM 偶爾會在 JSON 前後夾 markdown code fence，嘗試清除
+        text = raw.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        return json.loads(text)
+    except Exception as e:
+        logger.error("[merchant] vendor_id=%d failed to parse LLM JSON: %s\nraw=%s", vendor_id, e, raw[:200])
+        return {
+            "summary": "本週 AI 分析暫時無法產生。",
+            "suggestions": ["請稍後重新觸發 AI 分析。"],
+            "sentiment_stats": {"positive": 0, "neutral": 0, "negative": 0},
+        }
+
 # ── 寫回 DB ───────────────────────────────────────────────────────────────────
 
 def _upsert_service_summary(
     service_id: int,
+    service_name: str,
     service_vendor_id: int | None,
     summary_text: str,
     review_count: int,
@@ -404,6 +487,7 @@ def _upsert_service_summary(
     url = f"{BFF_BASE_URL}/merchant-api/services/{service_id}/review-summary"
     body = {
         "service_vendor_id": service_vendor_id,
+        "service_name": service_name,
         "summary_content": summary_text,
         "source_review_count": review_count,
         "source_avg_rating": avg_rating,
@@ -422,18 +506,41 @@ def _upsert_service_summary(
 
 def _upsert_vendor_summary(
     vendor_id: int,
-    summary_text: str,
-    review_count: int,
+    vendor_name: str,
+    summary: str,
+    suggestions: list[str],
+    sentiment_stats: dict,
+    week_start: str,
+    week_end: str,
+    recent_review_count: int,
+    total_review_count: int,
     avg_rating: float | None,
     latest_review_time: str | None,
     service_breakdown: list[dict],
 ) -> None:
-    """PUT /merchant-api/vendors/{vendor_id}/review-summary 寫回商家摘要。"""
+    """PUT /merchant-api/vendors/{vendor_id}/review-summary 寫回商家摘要。
+
+    頂層欄位對應：
+    - summary_content:  分析期間字串（供前端顯示「分析期間：...」）
+    - vendor_name:      商家名稱（頂層欄位，平行於 summary_content）
+    - summary_highlights: { summary, suggestions }（UI 兩個文字區塊）
+    - sentiment_stats:  { positive, neutral, negative }（UI 情緒圓餅圖）
+    """
     url = f"{BFF_BASE_URL}/merchant-api/vendors/{vendor_id}/review-summary"
+
+    # summary_content 存分析期間，前端可直接顯示
+    summary_content = f"分析期間：{week_start} – {week_end}"
+
     body = {
-        "summary_content": summary_text,
+        "summary_content": summary_content,
+        "vendor_name": vendor_name,
+        "summary_highlights": {
+            "summary": summary,
+            "suggestions": suggestions,
+        },
+        "sentiment_stats": sentiment_stats,
         "service_breakdown": service_breakdown,
-        "source_review_count": review_count,
+        "source_review_count": total_review_count,
         "source_avg_rating": avg_rating,
         "latest_review_cre_time": latest_review_time,
         "ai_model": BEDROCK_MODEL_ID,
@@ -443,6 +550,9 @@ def _upsert_vendor_summary(
     try:
         resp = httpx.put(url, json=body, timeout=30)
         resp.raise_for_status()
-        logger.info("[merchant] vendor_id=%d summary upserted (status=%d)", vendor_id, resp.status_code)
+        logger.info(
+            "[merchant] vendor_id=%d summary upserted (status=%d) recent=%d",
+            vendor_id, resp.status_code, recent_review_count,
+        )
     except Exception as e:
         logger.error("[merchant] vendor_id=%d failed to upsert summary: %s", vendor_id, e)

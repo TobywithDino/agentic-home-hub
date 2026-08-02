@@ -640,11 +640,11 @@
 
 - `GET .../review-summary`：找不到資料（尚未生成過，或已被軟刪除）回 404，語意同 `GET /orders/{record_id}/review` 的「尚未評價」模式。
 - `PUT .../review-summary`：完整覆寫語意。若 key 不存在則新建（回201），存在則整包覆蓋（回200），並將 `is_deleted` 重設為 `false`。呼叫端（生成流程）應在呼叫前自行查詢當下最新的評價聚合值（筆數/平均分/最新時間），連同 AI 生成結果一起送出；`generate_time` 由伺服器端填入當前時間，不接受呼叫端指定。
-- `PATCH .../review-summary/status`：只更新 `generate_status`/`error_message`。若目標 key 尚無記錄，會自動建立一筆殼記錄（其餘欄位皆為 `null`），讓生成流程可以「先標記01生成中」再非同步寫入完整內容，不用等 LLM 回應才第一次寫資料。建立服務項目摘要的殼記錄時，`service_vendor_id` 由 `cms_homepage_service` 查得（值相等關聯，非FK）；若 `service_id` 本身不存在於 `cms_homepage_service`，回 404。供應商摘要的殼記錄無此限制（`service_vendor_id` 本身即為路徑參數，不驗證是否存在於 `cms_homepage_service_vendor`）。
+- `PATCH .../review-summary/status`：只更新 `generate_status`/`error_message`。若目標 key 尚無記錄，會自動建立一筆殼記錄（其餘欄位皆為 `null`），讓生成流程可以「先標記01生成中」再非同步寫入完整內容，不用等 LLM 回應才第一次寫資料。建立服務項目摘要的殼記錄時，`service_vendor_id`/`service_name` 由 `cms_homepage_service` 查得（值相等關聯，非FK）；若 `service_id` 本身不存在於 `cms_homepage_service`，回 404。建立供應商摘要的殼記錄時，`vendor_name` 由 `cms_homepage_service_vendor` 查得；若 `service_vendor_id` 本身不存在，回 404。
 - `DELETE`：軟刪除（`is_deleted=true`），之後 `GET` 視為 404，但不清空欄位內容，方便日後除錯或恢復。
 - 因無身分驗證中介層，`PUT`/`PATCH` 的 `cre_id`/`upd_id` 皆填入系統識別碼 `SYSTEM_ACTOR_ID`（`00000000-0000-7000-8000-000000000000`），無法追蹤是哪個服務觸發的生成，比照 `catalog.py` 管理端 CRUD 的既有慣例。
 
-**`ServiceReviewSummaryUpsert`**：`service_vendor_id: int`（必填）、`summary_content: str?`、`summary_highlights: json?`、`sentiment_stats: json?`、`source_review_count: int`（必填，預設0）、`source_avg_rating: float?`、`latest_review_cre_time: datetime?`、`ai_model: str?`、`generate_status: str`（必填，`00`/`01`/`02`/`03`）、`error_message: str?`
+**`ServiceReviewSummaryUpsert`**：`service_vendor_id: int`（必填）、`service_name: str?`（≤100字元，通常由呼叫端查詢`cms_homepage_service.name`後一併帶入）、`summary_content: str?`、`summary_highlights: json?`、`sentiment_stats: json?`、`source_review_count: int`（必填，預設0）、`source_avg_rating: float?`、`latest_review_cre_time: datetime?`、`ai_model: str?`、`generate_status: str`（必填，`00`/`01`/`02`/`03`）、`error_message: str?`
 
 **`ServiceReviewSummaryOut`**
 
@@ -652,6 +652,7 @@
 |---|---|---|
 | `service_id` | `int` | 服務項目ID（PK，與`cms_homepage_service.id`共用值） |
 | `service_vendor_id` | `int` | 服務提供商ID，冗餘欄位 |
+| `service_name` | `str?` | 服務項目名稱快取（對應`cms_homepage_service.name`），避免前端/後台需另外查主檔才能顯示名稱 |
 | `summary_content` | `str?` | AI生成的摘要文字 |
 | `summary_highlights` | `json?` | 結構化重點，例如`{"pros":[...],"cons":[...]}` |
 | `sentiment_stats` | `json?` | 情感分布統計，例如`{"positive":12,"neutral":3,"negative":2}` |
@@ -667,7 +668,7 @@
 | `upd_id` / `upd_time` | `uuid?` / `datetime` | 異動者/異動時間 |
 | `is_stale` | `bool` | **計算欄位（非資料庫欄位）**：即時比對 `mms_order_review` 目前的 `COUNT(*)`/`MAX(cre_time)` 是否超過本筆記錄的 `source_review_count`/`latest_review_cre_time`，`true` 代表有新評價尚未納入摘要，建議觸發重新生成 |
 
-**`VendorReviewSummaryUpsert`** / **`VendorReviewSummaryOut`**：結構同上，差異：無 `service_vendor_id` 冗餘欄位（PK本身即為 `service_vendor_id`）；多一個 `service_breakdown: json?` 欄位（各服務項目的簡易統計快取，JSON陣列，例如`[{"service_id":1,"review_count":10,"avg_rating":4.5}]`，避免前端需另外逐一查詢 `ServiceReviewSummaryOut`）；`source_review_count`/`source_avg_rating` 為跨全部服務項目的加總/平均；`is_stale` 比對範圍是該供應商名下全部服務的 `mms_order_review`。
+**`VendorReviewSummaryUpsert`** / **`VendorReviewSummaryOut`**：結構同上，差異：無 `service_vendor_id` 冗餘欄位（PK本身即為 `service_vendor_id`）；`service_name` 換成 `vendor_name: str?`（≤50字元，對應`cms_homepage_service_vendor.name`的名稱快取，同樣理由）；多一個 `service_breakdown: json?` 欄位（各服務項目的簡易統計快取，JSON陣列，例如`[{"service_id":1,"review_count":10,"avg_rating":4.5}]`，避免前端需另外逐一查詢 `ServiceReviewSummaryOut`）；`source_review_count`/`source_avg_rating` 為跨全部服務項目的加總/平均；`is_stale` 比對範圍是該供應商名下全部服務的 `mms_order_review`。
 
 **`ReviewSummaryStatusUpdate`**：`generate_status: str`（必填，`00`/`01`/`02`/`03`）、`error_message: str?`（可選，通常搭配`generate_status='03'`失敗時填寫）
 
@@ -725,6 +726,7 @@
 - **2026-07-31**：新增 `GET /vendors/{service_vendor_id}/forms/full`（#78，見 `forms.py`），補上圖面未涵蓋的「獲取廠商表單內容」功能：輸入 service_vendor_id，回傳該廠商所有已審核且啟用表單的完整結構，避免前端需自行迴圈呼叫 #41+#43。
 - **2026-08-01**：新增第 I 章「訂單評價」（`mms_order_review`，#79~#85，見 `routers/reviews.py`），支援「每筆訂單使用者可提交一份評價」的需求。新增評價會同步更新對應訂單的 `comment_status`。新增 `GET /services/{service_id}/reviews`（#85）作為公開評價牆，是全部端點中唯一不需身分驗證即可呼叫的端點，回傳縮減欄位的 `PublicReviewOut`。原第I章「系統」順延為第J章。端點總數由78增至85，已對照實際 `/openapi.json` 核對一致。
 - **2026-08-01**：新增第 I2 章「評價AI摘要」（`mms_review_summary_service`/`mms_review_summary_vendor`，#86~#94，見 `routers/summaries.py`），支援使用者查看單一服務項目的評價AI摘要、供應商查看各服務摘要與整合總摘要的需求。本 server 只負責讀寫這兩張覆寫式快取表，不呼叫LLM。`PATCH .../status` 會在記錄不存在時自動建立殼記錄；`GET` 回應含即時計算欄位 `is_stale` 判斷摘要是否過期。端點總數由85增至94，已用本機 Docker PostgreSQL + uvicorn 實測全部9個端點行為正確。
+- **2026-08-02**：`mms_review_summary_service` 新增 `service_name: str?`（≤100字元）、`mms_review_summary_vendor` 新增 `vendor_name: str?`（≤50字元），分別快取對應主檔的名稱，避免前端/後台顯示摘要時需另外查`cms_homepage_service`/`cms_homepage_service_vendor`。`PUT`（#87/#92）由呼叫端隨生成結果一併帶入；`PATCH .../status`（#88/#93）建立殼記錄時由伺服器端自動查主檔帶入（服務項目查`cms_homepage_service.name`、供應商查`cms_homepage_service_vendor.name`，查無主檔皆回404）。不影響既有端點路徑，端點數量不變（仍94個）。已用`python -m py_compile`與`app.main`匯入驗證模型/schema/路由定義一致，尚待接上實際PostgreSQL（本機Docker或RDS）驗證讀寫行為。
 - **2026-08-01**：`cms_homepage_service` 新增 `form_id: int?` 欄位（`ServiceCreate`/`ServiceUpdate`/`ServiceOut`），解決「一個服務項目要對應到哪張諮詢表單」查詢缺口（原設計只能反向查`pms_form.service_vendor_id`，無法從單一`service_id`直接取得對應表單）。不影響既有端點路徑，端點數量不變（仍94個），已用本機 Docker PostgreSQL + uvicorn 實測 GET/POST/PATCH/DELETE 皆正確讀寫此欄位。種子資料同步更新：`service_vendor_id=1`名下4個服務項目（洗衣機清洗/冷氣清洗/專業清潔/計時家事服務）皆設為`form_id=9`（既有測試表單），示範多個服務項目共用同一張表單，其餘4個服務項目維持`NULL`。
 - **2026-08-01**：`label` 新增 `service_type: str?` 欄位（`LabelCreate`/`LabelUpdate`/`LabelOut`），支援「各服務類型自行維護專屬標籤」的需求（例如`type=6`餐廳訂位的「中餐廳」「泰式料理」）。名稱唯一性範圍由全域改為「同一`service_type`內」，通用標籤（`NULL`）另用 partial unique index 維持全域唯一。`GET /labels` 新增`service_type` query 參數，帶入時回傳「通用+該類型專屬」標籤聯集。端點數量不變（仍94個），已用本機 Docker PostgreSQL + uvicorn 實測唯一約束行為（同類型內重複名稱擋下、跨類型可同名、通用標籤全域唯一）與 CRUD 讀寫皆正確。種子資料新增2筆專屬標籤（中餐廳/泰式料理，`service_type="6"`）並示範關聯到既有的餐廳訂位服務項目。
 - **2026-08-01**：修復 `POST /labels`/`PATCH /labels/{label_id}` 遇到唯一約束衝突時回傳裸 500（`IntegrityError`未被攔截）的既有問題（非本次`service_type`欄位新增造成，是`create_label`/`update_label`原本就缺少`accounts.py`/`geo.py`/`catalog.py`其他`create_*`端點皆有的「先查重複再建立」慣例，這次新增分區唯一約束後才被實測發現）。改為主動查詢並回 409，`PATCH`會排除自身這筆避免誤判。已用本機 Docker PostgreSQL + uvicorn 實測9種情境（同類型重複/跨類型同名/通用標籤全域唯一/PATCH改名衝突/排除自己邏輯）皆正確，不影響既有端點路徑與數量。

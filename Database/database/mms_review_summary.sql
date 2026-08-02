@@ -8,6 +8,7 @@
 CREATE TABLE public.mms_review_summary_service (
 	service_id int4 NOT NULL,
 	service_vendor_id int4 NOT NULL,
+	service_name varchar(100) NULL,
 	summary_content text NULL,
 	summary_highlights jsonb NULL,
 	sentiment_stats jsonb NULL,
@@ -32,6 +33,7 @@ COMMENT ON TABLE public.mms_review_summary_service IS '服務項目評價AI摘�
 
 COMMENT ON COLUMN public.mms_review_summary_service.service_id IS '服務項目ID(對應cms_homepage_service.id)，本表PK即為此值';
 COMMENT ON COLUMN public.mms_review_summary_service.service_vendor_id IS '服務提供商ID，冗餘欄位，方便供應商一次查詢名下所有服務的摘要';
+COMMENT ON COLUMN public.mms_review_summary_service.service_name IS '服務項目名稱快取(對應cms_homepage_service.name)，避免前端/後台需另外查cms_homepage_service才能顯示名稱，隨每次生成/建立殼記錄時同步寫入';
 COMMENT ON COLUMN public.mms_review_summary_service.summary_content IS 'AI生成的摘要文字，面向使用者/供應商顯示的整體評語';
 COMMENT ON COLUMN public.mms_review_summary_service.summary_highlights IS '結構化重點，JSON格式，例如{"pros":["服務態度好","準時"],"cons":["價格偏高"]}';
 COMMENT ON COLUMN public.mms_review_summary_service.sentiment_stats IS '情感分布統計，JSON格式，例如{"positive":12,"neutral":3,"negative":2}';
@@ -58,6 +60,7 @@ COMMENT ON COLUMN public.mms_review_summary_service.upd_time IS '異動日期時
 
 CREATE TABLE public.mms_review_summary_vendor (
 	service_vendor_id int4 NOT NULL,
+	vendor_name varchar(50) NULL,
 	summary_content text NULL,
 	summary_highlights jsonb NULL,
 	sentiment_stats jsonb NULL,
@@ -81,6 +84,7 @@ COMMENT ON TABLE public.mms_review_summary_vendor IS '供應商整合評價AI摘
 -- Column comments
 
 COMMENT ON COLUMN public.mms_review_summary_vendor.service_vendor_id IS '服務提供商ID(對應cms_homepage_service_vendor.id)，本表PK即為此值';
+COMMENT ON COLUMN public.mms_review_summary_vendor.vendor_name IS '服務提供商名稱快取(對應cms_homepage_service_vendor.name)，避免前端/後台需另外查cms_homepage_service_vendor才能顯示名稱，隨每次生成/建立殼記錄時同步寫入';
 COMMENT ON COLUMN public.mms_review_summary_vendor.summary_content IS 'AI生成的整合摘要文字，橫跨該供應商名下所有服務的評價';
 COMMENT ON COLUMN public.mms_review_summary_vendor.summary_highlights IS '結構化重點，JSON格式，同mms_review_summary_service.summary_highlights';
 COMMENT ON COLUMN public.mms_review_summary_vendor.sentiment_stats IS '情感分布統計，JSON格式，同mms_review_summary_service.sentiment_stats';

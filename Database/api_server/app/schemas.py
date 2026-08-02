@@ -750,6 +750,7 @@ class ServiceReviewSummaryUpsert(BaseModel):
     """完整覆寫語意：呼叫端（AI生成流程）應自行查詢當下最新的評價聚合值
     （筆數/平均分/最新時間）連同生成結果一起送出。generate_time 由伺服器端填入。"""
     service_vendor_id: int
+    service_name: str | None = Field(default=None, max_length=100)
     summary_content: str | None = None
     summary_highlights: JsonValue | None = None
     sentiment_stats: JsonValue | None = None
@@ -765,6 +766,7 @@ class ServiceReviewSummaryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     service_id: int
     service_vendor_id: int
+    service_name: str | None
     summary_content: str | None
     summary_highlights: JsonValue | None
     sentiment_stats: JsonValue | None
@@ -789,6 +791,7 @@ class ServiceReviewSummaryOut(BaseModel):
 class VendorReviewSummaryUpsert(BaseModel):
     """結構同 ServiceReviewSummaryUpsert，差異是無 service_vendor_id 冗餘欄位
     （PK 本身即為 service_vendor_id），多一個 service_breakdown 統計快取。"""
+    vendor_name: str | None = Field(default=None, max_length=50)
     summary_content: str | None = None
     summary_highlights: JsonValue | None = None
     sentiment_stats: JsonValue | None = None
@@ -804,6 +807,7 @@ class VendorReviewSummaryUpsert(BaseModel):
 class VendorReviewSummaryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     service_vendor_id: int
+    vendor_name: str | None
     summary_content: str | None
     summary_highlights: JsonValue | None
     sentiment_stats: JsonValue | None

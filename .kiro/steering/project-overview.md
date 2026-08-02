@@ -116,6 +116,8 @@ agentic-home-hub/
 
 ⚠️ 這是 workshop 臨時帳號（AWS Workshop Studio），沒有身分驗證機制、沒有 HTTPS，資源可能隨時被回收。不要把 IP 或憑證分享到帳號外部。
 
+⚠️ **EC2 部署安全規則（僅適用於透過 SSM 對 EC2 執行的部署/維運指令，不影響本機開發時的一般檔案操作）**：絕對不要對 EC2 上的 `/home/ssm-user/aiwave/api_server/`、`/home/ssm-user/aiwave/database/`、`/home/ssm-user/aiwave/bff_server/` 這三個目錄本身執行 `rm -rf`（例如想「先清乾淨再解壓新版」）。這些目錄裡混著 git 追蹤的程式碼與**只存在 EC2 上、從未進版控、沒有任何備份**的機密設定檔（例如 `api_server/.env` 存 RDS 密碼與 PII 加密金鑰），整體刪除會連同機密一起銷毀，且部分後果不可逆（PII 金鑰遺失後舊加密資料永久解不開）。`tar -xzf` 本身就會覆蓋同名檔案，重新部署不需要先清空目錄；真正該清的只有 `__pycache__`/`*.pyc` 這類編譯快取（精準指定路徑刪除，例如 `rm -rf api_server/app/__pycache__`），不要擴大範圍。事故經過見 `Database/鬼故事_誤刪env事件.md`。
+
 ## 部署 bff_server 更新
 
 ⚠️ `bff_server/deploy.sh` 已被移出版控（commit `4f453dc chore: untrack`，推測因含 EC2 IP / instance id / S3 bucket 而 repo 要公開）。
@@ -190,8 +192,9 @@ agentcore logs               # 看 runtime 日誌
 - **pms_form 系列**：諮詢表單結構（form → group → topic → option/media）。merchant_api.py 的 `POST /forms` 提供一次性建立表單+巢狀題組/題目/選項的組裝端點；`PATCH /forms/{id}` 提供差異比對式的完整表單更新（前端傳整包巢狀結構，帶 `id` 的項目視為更新、不帶 `id` 視為新增、現況有但 payload 沒帶到的視為刪除，依 選項→題目→題組 順序刪除、表單→題組→題目→選項 順序新增/更新）；兩者皆因 api_server 只有單筆 CRUD 端點、無跨資源交易機制，BFF 依序呼叫多支端點組裝，中途失敗不會自動回滾。`GET /vendors/{id}/forms`（清單，僅主檔）、`GET /forms/{id}/full`（單張表單完整巢狀內容，直接轉發 api_server 現成端點）。`app_api.py` 的 `GET /services/{service_id}/form/full` 給 AI 管家用：走 `cms_homepage_service.form_id` 取該服務項目對應表單的完整內容（組合 `GET /services/{id}` 取 form_id + `GET /forms/{form_id}/full`），`form_id` 為 NULL 時回 404 並在 detail 說明「尚未設定對應表單」。**不要改用 `pms_form.service_vendor_id` 反查商家表單**：實際資料裡單一商家名下有十幾張表單（含測試用、給別的服務用的），沒有可靠依據挑出正確那張，`form_id` 就是為補這個查詢缺口而加的。
 - **pms_form_feedback**：使用者填寫表單後的回饋記錄
 - **mms_review_summary_service / mms_review_summary_vendor**：評價AI摘要表（`Database/database/mms_review_summary.sql`，新增功能，目前無種子資料）。皆為「覆寫式快取」設計，同一個key只保留最新1筆，重新生成時直接覆蓋，不留歷史版本：
-  - `mms_review_summary_service`：PK為`service_id`（與`cms_homepage_service.id`共用值），彙整單一服務項目底下所有`mms_order_review`的AI摘要，面向使用者與供應商共用同一份內容。
-  - `mms_review_summary_vendor`：PK為`service_vendor_id`，彙整供應商名下所有服務的評價，多一個`service_breakdown`欄位（JSON陣列快取各服務的評價數/平均分），僅供供應商後台使用。
+  - `mms_review_summary_service`：PK為`service_id`（與`cms_homepage_service.id`共用值），彙整單一服務項目底下所有`mms_order_review`的AI摘要，面向使用者與供應商共用同一份內容。`service_name`（新增，nullable，快取`cms_homepage_service.name`）避免顯示摘要時需另外查主檔。
+  - `mms_review_summary_vendor`：PK為`service_vendor_id`，彙整供應商名下所有服務的評價，多一個`service_breakdown`欄位（JSON陣列快取各服務的評價數/平均分），僅供供應商後台使用。`vendor_name`（新增，nullable，快取`cms_homepage_service_vendor.name`）理由同上。
+  - `service_name`/`vendor_name`由`PUT .../review-summary`時呼叫端（AI生成流程）隨結果一併帶入；`PATCH .../review-summary/status`建立殼記錄時則由api_server自動查主檔帶入，查無對應主檔會回404。
   - 兩張表都有`generate_status`（`00`待生成/`01`生成中/`02`已完成/`03`失敗）與`latest_review_cre_time`欄位，用於支援非同步生成流程與判斷摘要是否過期需重新生成。
   - `api_server/app/routers/summaries.py` 已實作對應端點（`GET`/`PUT`/`PATCH .../status`/`DELETE`，服務項目與供應商各一組，供應商多一支清單端點），**只負責讀寫這兩張表，不呼叫LLM**，實際生成AI摘要內容的流程（呼叫Bedrock等模型）由上層服務負責再把結果`PUT`回來。`GET`回應含計算欄位`is_stale`（即時比對`mms_order_review`最新聚合值判斷摘要是否過期）。`bff_server`的`merchant_api.py`目前有`PUT /services/{id}/review-summary`與`PUT /vendors/{id}/review-summary`兩支寫回摘要的轉發端點（純轉發，同樣不呼叫LLM，給AI摘要生成流程寫回結果用），其餘`GET`/`PATCH .../status`/`DELETE`/清單端點`bff_server`尚未包裝。詳細規格見`Database/API_Reference.md`「I2. 評價AI摘要」章節。
 

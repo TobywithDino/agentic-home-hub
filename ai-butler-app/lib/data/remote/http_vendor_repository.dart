@@ -6,57 +6,80 @@ import 'package:ai_butler_app/domain/repositories/repositories.dart';
 
 /// 真實後端的服務類別實作。
 ///
-/// BFF 目前沒有直接的「取得所有服務類別」端點，
-/// 但從 vendors endpoint 文件得知可用的 service_type：
-/// "1"=一般居家清潔, "2"=家電清洗, "3"=包裹寄送,
-/// "6"=餐廳訂位, "9"=美食外送, "10"=水電修繕, "11"=商城購物
+/// 只走 APP 端接點：對每個服務類型並行呼叫
+/// `GET /app-api/service-types/{service_type}/vendors`，用回應裡的
+/// `matched_services`（真實 `cms_homepage_service` 資料）統計服務商數與取代表圖。
 ///
-/// 暫時以硬編碼類別清單 + 呼叫 vendors API 取得各類別服務商數回傳。
+/// 沒有廠商的類型不會出現在首頁。刻意不用 `/merchant-api/services`：
+/// 那是商家後台接點，APP 端不該依賴。
 class HttpServiceCatalogRepository implements ServiceCatalogRepository {
   HttpServiceCatalogRepository(this._client);
 
   final ApiClient _client;
 
-  /// BFF 文件定義的服務類別。
-  static const List<_CategoryDef> _knownCategories = [
-    _CategoryDef(type: '1', name: '一般居家清潔'),
-    _CategoryDef(type: '2', name: '家電清洗'),
-    _CategoryDef(type: '3', name: '包裹寄送'),
-    _CategoryDef(type: '6', name: '餐廳訂位'),
-    _CategoryDef(type: '9', name: '美食外送'),
-    _CategoryDef(type: '10', name: '水電修繕'),
-    _CategoryDef(type: '11', name: '商城購物'),
-  ];
+  /// service type → 顯示名稱對照。
+  ///
+  /// 後端沒有「服務類型主檔」端點可查名稱，只能在前端維護這張表
+  /// （對照 README 的 service type 定義）。未知代碼會顯示原始代碼而不隱藏。
+  static const Map<String, String> _typeNames = <String, String>{
+    '1': '一般居家清潔',
+    '2': '家電清洗',
+    '3': '包裹寄送',
+    '6': '餐廳訂位',
+    '9': '美食外送',
+    '10': '水電修繕',
+    '11': '商城購物',
+  };
 
   @override
   Future<List<ServiceCategory>> fetchCategories() async {
-    // 並行呼叫所有類別的 vendors API 取得 vendorCount，大幅加速載入
-    final futures = _knownCategories.map((cat) async {
-      int vendorCount = 0;
+    final futures = _typeNames.keys.map((type) async {
       try {
         final response = await _client.get<List<dynamic>>(
-          ApiEndpoints.vendorsByServiceType(cat.type),
+          ApiEndpoints.vendorsByServiceType(type),
         );
-        vendorCount = response.data?.length ?? 0;
+        return (type: type, vendors: response.data ?? const <dynamic>[]);
       } catch (_) {
-        // 若某類別取得失敗，仍回傳該類別但數量為 0
+        // 單一類型失敗不影響其他類型，該類型視為無廠商。
+        return (type: type, vendors: const <dynamic>[]);
       }
-      return ServiceCategory(
-        serviceId: int.tryParse(cat.type) ?? 0,
-        type: cat.type,
-        name: cat.name,
-        vendorCount: vendorCount,
-      );
     });
 
-    return Future.wait(futures);
-  }
-}
+    final results = await Future.wait(futures);
 
-class _CategoryDef {
-  const _CategoryDef({required this.type, required this.name});
-  final String type;
-  final String name;
+    final categories = <ServiceCategory>[];
+    for (final result in results) {
+      // 沒有廠商的類型也要顯示：使用者需要看到平台提供哪些服務類型，
+      // 點進去再由列表頁呈現「找不到符合條件的服務商」。
+
+      // 從 matched_services 取第一張有效圖片當類別代表圖。
+      String imgUrl = '';
+      for (final vendor in result.vendors) {
+        if (vendor is! Map) continue;
+        final services = vendor['matched_services'];
+        if (services is! List) continue;
+        for (final service in services) {
+          if (service is! Map) continue;
+          final url = service['img_url'];
+          if (url is String && url.isNotEmpty) {
+            imgUrl = url;
+            break;
+          }
+        }
+        if (imgUrl.isNotEmpty) break;
+      }
+
+      categories.add(ServiceCategory(
+        serviceId: int.tryParse(result.type) ?? 0,
+        type: result.type,
+        name: _typeNames[result.type] ?? '服務類型 ${result.type}',
+        imgUrl: imgUrl,
+        vendorCount: result.vendors.length,
+      ));
+    }
+
+    return categories;
+  }
 }
 
 /// 真實後端的服務商查詢實作。
@@ -116,7 +139,27 @@ class HttpVendorRepository implements VendorRepository {
 
   @override
   Future<VendorDetail> fetchVendorDetail(int vendorId) async {
-    // 並行查詢所有類別，找到包含此 vendorId 的結果
+    // 用 /app-api/vendors/{id}/services 取得該廠商的所有服務
+    try {
+      final response = await _client.get<List<dynamic>>(
+        ApiEndpoints.vendorServices(vendorId),
+      );
+      final services = response.data ?? [];
+      if (services.isNotEmpty) {
+        final firstService = services.first as Map<String, dynamic>;
+        return VendorDetail(
+          vendorId: vendorId,
+          name: firstService['name'] as String? ?? '',
+          description: firstService['description'] as String? ?? '',
+          imgUrl: firstService['img_url'] as String? ?? '',
+          formId: firstService['form_id'] as int? ?? 0,
+          serviceId: firstService['id'] as int? ?? 0,
+          introContent: firstService['description'] as String? ?? '',
+        );
+      }
+    } catch (_) {}
+
+    // fallback: 遍歷 service-types 找 vendor
     const types = ['1', '2', '3', '6', '9', '10', '11'];
     final futures = types.map((type) async {
       try {

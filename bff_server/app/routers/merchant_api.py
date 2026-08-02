@@ -839,7 +839,7 @@ async def get_vendor_review_summary(
     service_vendor_id: int,
     db_api: DbApiClient = Depends(get_db_api_client),
 ):
-    """取得商家的整合評價 AI 摘要
+    """取得商家的整合評價 AI 摘要（AI 智慧洞察）
 
     **輸入**
     - `service_vendor_id` (path, int): 服務商 ID
@@ -848,32 +848,49 @@ async def get_vendor_review_summary(
     ```json
     {
       "service_vendor_id": 1,
-      "summary_content": "整體來看，該商家名下服務普遍獲得好評...",
-      "summary_highlights": { "pros": ["服務多樣", "口碑穩定"], "cons": [] },
-      "sentiment_stats": { "positive": 30, "neutral": 5, "negative": 3 },
+      "summary_content": "分析期間：2026/07/25 – 2026/08/01",
+      "vendor_name": "潔淨家居清潔有限公司",
+      "summary_highlights": {
+        "summary": "本週服務整體口碑穩健，顧客普遍對準時性與專業度給予肯定。",
+        "suggestions": [
+          "「服務態度」平均最低，建議優先改善此環節。",
+          "1 筆中立評價最易透過細節優化轉為正面。",
+          "主動邀請客戶留下服務體驗回饋。"
+        ]
+      },
+      "sentiment_stats": { "positive": 3, "neutral": 1, "negative": 0 },
       "service_breakdown": [
-        { "service_id": 17, "review_count": 10, "avg_rating": 4.5 },
-        { "service_id": 18, "review_count": 8, "avg_rating": 4.2 }
+        { "service_id": 1, "review_count": 3, "avg_rating": 4.0 },
+        { "service_id": 2, "review_count": 1, "avg_rating": 4.0 }
       ],
-      "source_review_count": 38,
-      "source_avg_rating": 4.4,
-      "latest_review_cre_time": "2026-08-01T09:00:00Z",
-      "ai_model": "claude-3-5-sonnet",
-      "generate_status": "00=待生成 01=生成中 02=已完成 03=失敗",
+      "source_review_count": 4,
+      "source_avg_rating": 4.0,
+      "latest_review_cre_time": "2026-06-22T09:20:10Z",
+      "ai_model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "generate_status": "02",
       "generate_time": "...",
       "error_message": null,
       "is_stale": false
     }
     ```
-    `service_breakdown` 是橫跨該商家名下所有服務項目的評價數/平均分快取
-    陣列；`is_stale` 是計算欄位，即時比對 `mms_order_review` 目前的最新
-    聚合值，`true` 代表有新評價尚未納入這份摘要。
+
+    欄位說明：
+    - `summary_content`：分析期間字串，格式 `分析期間：YYYY/MM/DD – YYYY/MM/DD`
+    - `vendor_name`：商家名稱（頂層欄位，平行於 `summary_content`）
+    - `summary_highlights.summary`：本週住戶需求 AI 摘要，一段字串，≤50 字
+    - `summary_highlights.suggestions`：廠商營運與服務優化建議，3~4 點陣列，每點 ≤20 字
+    - `sentiment_stats`：近一週評價情緒統計（`positive`=overall_rating 4~5、`neutral`=3、`negative`=1~2）
+    - `service_breakdown`：各服務項目評價數/平均分快取（全部評價計算，非僅近一週）
+    - `source_review_count`：全部評價總數（供 `is_stale` 比對用）
+    - `is_stale`：計算欄位，`true` 代表有新評價尚未納入本份摘要，建議重新觸發生成
 
     **說明**
 
-    給商家後台顯示「整合評價摘要」頁面用（僅供商家後台使用，橫跨其
-    名下所有服務彙整）。直接轉發 api_server 現成端點，未做額外處理。
-    尚未生成過摘要時回 404。
+    給商家後台「AI 智慧洞察」頁面用。Lambda 每週定時（或手動觸發）只取
+    **近 7 天**評價送給 LLM 產生 `summary` 與 `suggestions`，
+    `sentiment_stats` 也是近 7 天統計；`service_breakdown` 和
+    `source_review_count`/`source_avg_rating` 則涵蓋全部歷史評價（供
+    `is_stale` 判斷與整體趨勢參考）。尚未生成過摘要時回 404。
     """
     resp = await db_api.get(f"/vendors/{service_vendor_id}/review-summary")
     return resp.json()
@@ -892,35 +909,50 @@ async def upsert_vendor_review_summary(
     - body（`VendorReviewSummaryUpsert`）：
     ```json
     {
-      "summary_content": "整體來看，該商家名下服務普遍獲得好評...",
-      "summary_highlights": { "pros": ["服務多樣", "口碑穩定"], "cons": [] },
-      "sentiment_stats": { "positive": 30, "neutral": 5, "negative": 3 },
+      "summary_content": "分析期間：2026/07/25 – 2026/08/01",
+      "vendor_name": "潔淨家居清潔有限公司",
+      "summary_highlights": {
+        "summary": "本週服務整體口碑穩健，顧客普遍對準時性與專業度給予肯定。",
+        "suggestions": [
+          "「服務態度」平均最低，建議優先改善此環節。",
+          "1 筆中立評價最易透過細節優化轉為正面。",
+          "主動邀請客戶留下服務體驗回饋。"
+        ]
+      },
+      "sentiment_stats": { "positive": 3, "neutral": 1, "negative": 0 },
       "service_breakdown": [
-        { "service_id": 17, "review_count": 10, "avg_rating": 4.5 },
-        { "service_id": 18, "review_count": 8, "avg_rating": 4.2 }
+        { "service_id": 1, "review_count": 3, "avg_rating": 4.0 },
+        { "service_id": 2, "review_count": 1, "avg_rating": 4.0 }
       ],
-      "source_review_count": 38,
-      "source_avg_rating": 4.4,
-      "latest_review_cre_time": "2026-08-01T09:00:00Z",
-      "ai_model": "claude-3-5-sonnet",
-      "generate_status": "00=待生成 01=生成中 02=已完成 03=失敗",
+      "source_review_count": 4,
+      "source_avg_rating": 4.0,
+      "latest_review_cre_time": "2026-06-22T09:20:10Z",
+      "ai_model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "generate_status": "02",
       "error_message": null
     }
     ```
-    `service_breakdown` 是橫跨該商家名下所有服務項目的評價數/平均分快取
-    陣列；其餘欄位語意同服務項目版本，`generate_time` 由 api_server 端
-    自動填入。
+
+    欄位說明：
+    - `summary_content`：分析期間字串，由 Lambda 填入 `分析期間：YYYY/MM/DD – YYYY/MM/DD`
+    - `vendor_name`：商家名稱（頂層欄位，平行於 `summary_content`）
+    - `summary_highlights.summary`：本週住戶需求 AI 摘要，一段字串，≤50 字，由 Lambda 呼叫 Bedrock 生成
+    - `summary_highlights.suggestions`：廠商營運與服務優化建議，3~4 點陣列，每點 ≤20 字
+    - `sentiment_stats`：近一週評價的情緒統計，`positive`/`neutral`/`negative` 各為筆數
+    - `service_breakdown`：各服務項目全部評價的數量與平均分快取
+    - `source_review_count`/`source_avg_rating`：全部歷史評價的總數與平均分（供 `is_stale` 比對）
+    - `generate_status`：`00`=待生成 `01`=生成中 `02`=已完成 `03`=失敗
+    - `generate_time`：由 api_server 端自動填入當前時間，呼叫端不需指定
 
     **輸出**：寫入後的完整摘要物件（`VendorReviewSummaryOut`，含計算欄位
-    `is_stale`）。該 `service_vendor_id` 尚無摘要記錄時回 201，已有記錄
-    時回 200（整包覆蓋）。
+    `is_stale`）。該 `service_vendor_id` 尚無摘要記錄時回 201（新建），
+    已有記錄時回 200（整包覆蓋）。
 
     **說明**
 
-    給上層 AI 摘要生成流程呼叫 Bedrock 等模型彙整該商家名下所有服務的
-    評價後，把結果寫回 `mms_review_summary_vendor`（僅供商家後台使用，
-    橫跨其名下所有服務彙整）。此端點**不呼叫 LLM**，純粹轉發到 api_server
-    對應端點，覆寫式快取設計（同一 `service_vendor_id` 只保留最新 1 筆）。
+    給 AI 摘要生成流程（Lambda）呼叫 Bedrock 產生摘要後寫回用。
+    此端點**不呼叫 LLM**，純粹轉發到 api_server 對應端點做資料存取。
+    覆寫式快取設計：同一 `service_vendor_id` 只保留最新 1 筆，不留歷史版本。
     """
     resp = await db_api.put(f"/vendors/{service_vendor_id}/review-summary", json=payload)
     return resp.json()

@@ -1,5 +1,6 @@
 import 'package:ai_butler_app/core/config/api_endpoints.dart';
 import 'package:ai_butler_app/core/error/app_error.dart';
+import 'package:ai_butler_app/core/utils/api_time.dart';
 import 'package:ai_butler_app/data/remote/api_client.dart';
 import 'package:ai_butler_app/domain/models/domain_models.dart';
 import 'package:ai_butler_app/domain/repositories/repositories.dart';
@@ -22,7 +23,8 @@ class HttpFeedbackRepository implements FeedbackRepository {
     final dateStr = '${now.year}'
         '${now.month.toString().padLeft(2, '0')}'
         '${now.day.toString().padLeft(2, '0')}';
-    final seq = (now.millisecondsSinceEpoch % 1000000).toString().padLeft(6, '0');
+    final seq =
+        (now.millisecondsSinceEpoch % 1000000).toString().padLeft(6, '0');
     final feedbackNo = 'FB$dateStr$seq';
 
     final payload = <String, dynamic>{
@@ -33,13 +35,22 @@ class HttpFeedbackRepository implements FeedbackRepository {
       'feedback_content': draft.feedbackContent,
       'form_type': draft.formType,
       'contact_name': draft.contactName.isNotEmpty ? draft.contactName : null,
-      'contact_mobile': draft.contactMobile.isNotEmpty ? draft.contactMobile : null,
-      'contact_landline': draft.contactLandline.isNotEmpty ? draft.contactLandline : null,
-      'contact_email': draft.contactEmail.isNotEmpty ? draft.contactEmail : null,
+      'contact_mobile':
+          draft.contactMobile.isNotEmpty ? draft.contactMobile : null,
+      'contact_landline':
+          draft.contactLandline.isNotEmpty ? draft.contactLandline : null,
+      'contact_email':
+          draft.contactEmail.isNotEmpty ? draft.contactEmail : null,
       'preferred_contact_time': draft.preferredContactTime,
-      'contact_address_county': draft.contactAddressCounty.isNotEmpty ? draft.contactAddressCounty : null,
-      'contact_address_district': draft.contactAddressDistrict.isNotEmpty ? draft.contactAddressDistrict : null,
-      'contact_address_detail': draft.contactAddressDetail.isNotEmpty ? draft.contactAddressDetail : null,
+      'contact_address_county': draft.contactAddressCounty.isNotEmpty
+          ? draft.contactAddressCounty
+          : null,
+      'contact_address_district': draft.contactAddressDistrict.isNotEmpty
+          ? draft.contactAddressDistrict
+          : null,
+      'contact_address_detail': draft.contactAddressDetail.isNotEmpty
+          ? draft.contactAddressDetail
+          : null,
       'description': draft.description.isNotEmpty ? draft.description : null,
       'inbr_account_id': accountId,
     };
@@ -57,10 +68,10 @@ class HttpFeedbackRepository implements FeedbackRepository {
       );
     }
 
-    final creTime = body['cre_time'] as String?;
     return FeedbackReceipt(
       feedbackNo: body['feedback_no'] as String? ?? feedbackNo,
-      createdAt: creTime != null ? DateTime.tryParse(creTime) : DateTime.now(),
+      // 後端回 UTC，統一轉本地時區再交給畫面顯示。
+      createdAt: ApiTime.parseOr(body['cre_time']),
     );
   }
 }

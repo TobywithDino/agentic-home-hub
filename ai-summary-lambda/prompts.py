@@ -41,16 +41,19 @@ def build_consumer_prompt(service_name: str, reviews: list[dict]) -> str:
 注意：若評價數量不足（少於 3 筆），請說明資料量有限，摘要僅供參考。"""
 
 
-def build_merchant_prompt(vendor_name: str, reviews: list[dict]) -> str:
+def build_merchant_prompt(vendor_name: str, reviews: list[dict], week_start: str, week_end: str, service_names: dict[int, str] | None = None) -> str:
     """
-    給商家看的經營洞察 prompt。
-    重點：找出服務痛點、挖掘改善機會、分析各服務項目差異。
+    給商家看的 AI 智慧洞察 prompt。
+    輸出結構化 JSON，對應 UI 三個區塊：
+    - summary:        本週住戶需求 AI 摘要（字串，≤125 字）
+    - suggestions:    廠商營運與服務優化建議（3~4 點陣列，每點 ≤20 字）
+    - sentiment_stats: 客戶情緒統計（positive / neutral / negative 筆數）
+
+    service_names: {service_id: service_name}，有傳入時評價區塊顯示服務名稱而非 ID
     """
-    review_lines = _format_reviews_for_prompt(reviews)
+    review_lines = _format_reviews_for_prompt(reviews, service_names=service_names)
 
-    return f"""你是一個社區服務平台的商業分析助手。以下是「{vendor_name}」這家服務商旗下所有服務項目的用戶評價資料。
-
-請根據這些評價，產生一份給**商家經營者**閱讀的評價洞察報告，幫助他們了解目前服務品質與改善方向。
+    return f"""你是一個社區服務平台的 AI 分析助手。以下是「{vendor_name}」在 {week_start} 至 {week_end} 這一週內收到的客戶評價資料。
 
 ## 評價資料
 
@@ -58,28 +61,35 @@ def build_merchant_prompt(vendor_name: str, reviews: list[dict]) -> str:
 
 ## 輸出格式要求
 
-請用繁體中文輸出，結構如下：
+**只輸出 JSON，不要有任何其他文字或 markdown 包裝。**
 
-**整體表現**：（整體平均分、評價總數、各服務項目評分分佈概況）
+輸出格式如下：
+{{
+  "summary": "根據本週所有文字評論做一段精簡但具體的摘要（至多 125 字）",
+  "suggestions": [
+    "「服務態度」平均最低，建議優先改善此環節。",
+    "N 筆中立評價代表體驗尚可但未達期待，是最易透過細節優化轉為正面的區間。",
+    "第三條建議（根據評價內容給出，≤15 字）",
+    "第四條建議（選填，若有明顯問題才加，≤15 字）"
+  ],
+  "sentiment_stats": {{
+    "positive": 正面評價筆數（overall_rating 4~5 分）,
+    "neutral": 中立評價筆數（overall_rating 3 分）,
+    "negative": 負面評價筆數（overall_rating 1~2 分）
+  }}
+}}
 
-**優勢項目**：
-- 列出評分最高或正面評價最多的服務項目及其亮點
-
-**待改善項目**：
-- 列出評分較低或客訴較多的服務項目，並引用具體評價內容說明原因
-
-**顧客聲音關鍵字**：
-- 列出最常出現的正面關鍵字（3~5 個）
-- 列出最常出現的負面關鍵字（3~5 個，若無可略）
-
-**改善建議**：
-- 針對待改善項目提出 2~3 個具體可執行的建議
-
-注意：若某服務項目評價數量不足（少於 3 筆），個別分析僅供參考，請標注。"""
+規則：
+1. summary 輸出一段摘要，繁體中文，**至多 125 字**（含標點）
+2. suggestions 3~4 點，每點繁體中文，**至多 20 字**（含標點），基於本週評價給出具體可執行的建議
+3. sentiment_stats 依 overall_rating 分類：4~5 分為正面、3 分為中立、1~2 分為負面
+4. 若本週無任何評價，summary 改為「本週尚無新評價資料。」，suggestions 給通用建議，sentiment_stats 全填 0"""
 
 
-def _format_reviews_for_prompt(reviews: list[dict]) -> str:
-    """將 review 物件陣列格式化成 prompt 裡的純文字區塊。"""
+def _format_reviews_for_prompt(reviews: list[dict], service_names: dict[int, str] | None = None) -> str:
+    """將 review 物件陣列格式化成 prompt 裡的純文字區塊。
+    service_names: {service_id: name}，有傳入時顯示服務名稱，否則顯示服務ID。
+    """
     if not reviews:
         return "（目前無評價資料）"
 
@@ -87,8 +97,14 @@ def _format_reviews_for_prompt(reviews: list[dict]) -> str:
     for i, r in enumerate(reviews, 1):
         rating = r.get("overall_rating", "N/A")
         content = r.get("review_content") or "（無文字評價）"
-        service_id = r.get("service_id", "")
+        service_id = r.get("service_id")
         cre_time = str(r.get("cre_time", ""))[:10]  # 只取日期部分
+
+        # 服務標籤：有名稱就顯示名稱，否則退回 ID
+        if service_names and service_id and service_id in service_names:
+            service_label = service_names[service_id]
+        else:
+            service_label = f"服務ID:{service_id}" if service_id else "未知服務"
 
         # rating_detail 若有的話也附上
         detail = r.get("rating_detail")
@@ -98,7 +114,7 @@ def _format_reviews_for_prompt(reviews: list[dict]) -> str:
             detail_str = f"（細項：{', '.join(detail_parts)}）"
 
         lines.append(
-            f"{i}. [服務ID:{service_id}] 評分:{rating}/5{detail_str} | {cre_time}\n   評價內容：{content}"
+            f"{i}. [{service_label}] 評分:{rating}/5{detail_str} | {cre_time}\n   評價內容：{content}"
         )
 
     return "\n\n".join(lines)
