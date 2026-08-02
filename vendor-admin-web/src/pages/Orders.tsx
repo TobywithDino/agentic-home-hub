@@ -3,7 +3,14 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
-import { fetchOrders, updateOrderStatus, ORDER_STATUS_MAP, type OrderRecord, type OrderStatusCode } from '@/api'
+import {
+  fetchOrders,
+  updateOrderStatus,
+  ORDER_STATUS_MAP,
+  type OrderRecord,
+  type OrderStatusCode,
+} from '@/api'
+import { useServiceContext } from '@/contexts/ServiceContext'
 import { ArrowUpDown } from 'lucide-react'
 
 function getStatusVariant(status: OrderStatusCode) {
@@ -31,6 +38,14 @@ export default function Orders() {
 
   // Filtering
   const [statusFilter, setStatusFilter] = useState<OrderStatusCode | '全部'>('全部')
+
+  // 跟隨側邊欄的全域服務選取
+  const {
+    selectedService,
+    selectedServiceId,
+    isAllServices,
+    loading: servicesLoading,
+  } = useServiceContext()
 
   // Confirmation modal for status change
   const [confirmTarget, setConfirmTarget] = useState<{ order: OrderRecord; newStatus: OrderStatusCode } | null>(null)
@@ -61,6 +76,11 @@ export default function Orders() {
   const sortedAndFiltered = useMemo(() => {
     let data = [...orders]
 
+    // 跟隨全域選取；選「所有服務」時不做篩選
+    if (typeof selectedServiceId === 'number') {
+      data = data.filter((o) => o.serviceId === selectedServiceId)
+    }
+
     if (statusFilter !== '全部') {
       data = data.filter((o) => o.orderStatus === statusFilter)
     }
@@ -73,7 +93,7 @@ export default function Orders() {
     })
 
     return data
-  }, [orders, sortKey, sortDir, statusFilter])
+  }, [orders, sortKey, sortDir, statusFilter, selectedServiceId])
 
   // Handle inline select change in table -> open confirmation
   const handleSelectChange = (order: OrderRecord, newStatus: OrderStatusCode) => {
@@ -127,7 +147,7 @@ export default function Orders() {
     </button>
   )
 
-  if (loading) {
+  if (loading || servicesLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <p className="text-slate-500">載入中...</p>
@@ -137,7 +157,24 @@ export default function Orders() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-900">訂單管理</h1>
+      <div>
+        <h1 className="text-2xl font-bold text-slate-900">訂單管理</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          {isAllServices ? (
+            <>
+              目前顯示<span className="font-medium text-slate-700">所有服務</span>的訂單
+            </>
+          ) : selectedService ? (
+            <>
+              目前服務：
+              <span className="font-medium text-slate-700">{selectedService.name}</span>
+              <span className="text-slate-400">（可於左側切換）</span>
+            </>
+          ) : (
+            '尚無服務項目，請先至「服務管理總覽」新增'
+          )}
+        </p>
+      </div>
 
       {/* Filter Bar */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -324,6 +361,107 @@ export default function Orders() {
                 </table>
               </div>
             </section>
+
+            {/* 原始諮詢表單內容（接單時存入 vendor_data）*/}
+            {detailOrder.vendorData ? (
+              <section className="space-y-2">
+                <h3 className="text-sm font-semibold text-slate-700 border-b border-slate-200 pb-1">
+                  📝 原始諮詢表單內容
+                </h3>
+
+                {detailOrder.vendorData.content && (
+                  <div className="rounded-md bg-slate-50 border border-slate-200 p-3">
+                    {/* content 已是「題目標題：答案」的多行文字，保留換行 */}
+                    <p className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">
+                      {detailOrder.vendorData.content}
+                    </p>
+                  </div>
+                )}
+
+                {(detailOrder.vendorData.selectedOptions?.length ?? 0) > 0 && (
+                  <div>
+                    <span className="text-xs text-slate-500">選擇的項目</span>
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      {detailOrder.vendorData.selectedOptions!.map((opt, idx) => (
+                        <Badge key={`${opt}-${idx}`} variant="secondary">
+                          {opt}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {detailOrder.vendorData.specialRequirements && (
+                  <div>
+                    <span className="text-xs text-slate-500">特殊需求</span>
+                    <p className="text-sm mt-1 p-2.5 bg-amber-50 border border-amber-200 rounded-md text-amber-900">
+                      {detailOrder.vendorData.specialRequirements}
+                    </p>
+                  </div>
+                )}
+
+                {detailOrder.vendorData.contact && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm pt-1">
+                    {detailOrder.vendorData.contact.name && (
+                      <div>
+                        <span className="text-slate-500">聯絡人：</span>
+                        <span className="font-medium">
+                          {detailOrder.vendorData.contact.name}
+                        </span>
+                      </div>
+                    )}
+                    {detailOrder.vendorData.contact.phone && (
+                      <div>
+                        <span className="text-slate-500">聯絡電話：</span>
+                        <span className="font-medium">
+                          {detailOrder.vendorData.contact.phone}
+                        </span>
+                      </div>
+                    )}
+                    {detailOrder.vendorData.contact.email && (
+                      <div>
+                        <span className="text-slate-500">Email：</span>
+                        <span className="font-medium">
+                          {detailOrder.vendorData.contact.email}
+                        </span>
+                      </div>
+                    )}
+                    {detailOrder.vendorData.contact.address && (
+                      <div className="sm:col-span-2">
+                        <span className="text-slate-500">服務地址：</span>
+                        <span className="font-medium">
+                          {detailOrder.vendorData.contact.address}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {detailOrder.vendorData.preferredContactTime && (
+                  <p className="text-xs text-slate-500">
+                    偏好聯絡時間：{detailOrder.vendorData.preferredContactTime}
+                  </p>
+                )}
+
+                {detailOrder.vendorData.feedbackNo && (
+                  <p className="text-xs text-slate-400 pt-1">
+                    來源諮詢單：
+                    <span className="font-mono">{detailOrder.vendorData.feedbackNo}</span>
+                    {detailOrder.vendorData.formId != null &&
+                      `（表單版本 #${detailOrder.vendorData.formId}）`}
+                  </p>
+                )}
+              </section>
+            ) : (
+              <section className="space-y-2">
+                <h3 className="text-sm font-semibold text-slate-700 border-b border-slate-200 pb-1">
+                  📝 原始諮詢表單內容
+                </h3>
+                <p className="text-sm text-slate-400 py-1">
+                  此訂單沒有帶入諮詢表單內容（可能非由諮詢單接單轉入，或建立於此功能上線前）
+                </p>
+              </section>
+            )}
 
             {/* Status Switch */}
             <section className="space-y-3 pt-2 border-t border-slate-200">

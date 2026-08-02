@@ -2,12 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
-import Consultations from '@/pages/Consultations'
+import Feedbacks from '@/pages/Feedbacks'
 import Orders from '@/pages/Orders'
 import Settings from '@/pages/Settings'
+import ServicesOverview from '@/pages/ServicesOverview'
+import FormEditor from '@/pages/FormEditor'
+import ServiceLabels from '@/pages/ServiceLabels'
 import Layout from '@/components/Layout'
 import { Toast } from '@/components/ui/toast'
 import { registerApiErrorHandler, setVendorId } from '@/api'
+import { ServiceProvider } from '@/contexts/ServiceContext'
 
 export default function App() {
   const [vendorId, setVendorIdState] = useState<number | null>(null)
@@ -47,13 +51,27 @@ export default function App() {
         />
         <Route
           element={
-            isLoggedIn ? <Layout onLogout={handleLogout} /> : <Navigate to="/login" replace />
+            isLoggedIn ? (
+              // ServiceProvider 掛在登入後的版面內，確保服務清單於登入取得
+              // vendorId 之後才開始載入
+              <ServiceProvider>
+                <Layout onLogout={handleLogout} />
+              </ServiceProvider>
+            ) : (
+              <Navigate to="/login" replace />
+            )
           }
         >
+          {/* 廠商全域層：不受 selectedServiceId 影響 */}
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/consultations" element={<Consultations />} />
-          <Route path="/orders" element={<Orders />} />
+          <Route path="/services" element={<ServicesOverview />} />
           <Route path="/settings" element={<Settings />} />
+
+          {/* 單一服務層：完全跟隨 selectedServiceId */}
+          <Route path="/orders" element={<Orders />} />
+          <Route path="/feedbacks" element={<Feedbacks />} />
+          <Route path="/form-editor" element={<FormEditor />} />
+          <Route path="/service-labels" element={<ServiceLabels />} />
         </Route>
         <Route path="*" element={<Navigate to={isLoggedIn ? '/dashboard' : '/login'} replace />} />
       </Routes>
