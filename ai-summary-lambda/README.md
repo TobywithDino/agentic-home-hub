@@ -72,7 +72,7 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 
 | 視角 | 評價來源端點 | 分析對象 | 寫回端點 | DB 資料表 |
 |---|---|---|---|---|
-| 消費者 | `GET /app-api/services/{id}/reviews` | 每個服務項目，全部評價 | `PUT /merchant-api/services/{id}/review-summary` | `mms_review_summary_service` |
+| 消費者 | `GET /app-api/services/{id}/reviews` | 每個服務項目，**近一週**評價 | `PUT /merchant-api/services/{id}/review-summary` | `mms_review_summary_service` |
 | 商家 | `GET /merchant-api/vendors/{id}/reviews` | 每個商家，**近一週**評價 | `PUT /merchant-api/vendors/{id}/review-summary` | `mms_review_summary_vendor` |
 
 ---
@@ -107,7 +107,7 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 
 | 視角 | 端點 | 篩選範圍 |
 |---|---|---|
-| 消費者 | `GET /app-api/services/{id}/reviews` | 全部評價 |
+| 消費者 | `GET /app-api/services/{id}/reviews` | 拉回後在 Lambda 側篩近 7 天（`cre_time >= now - 7d`） |
 | 商家 | `GET /merchant-api/vendors/{id}/reviews` | 拉回後在 Lambda 側篩近 7 天（`cre_time >= now - 7d`） |
 
 ---
@@ -118,12 +118,11 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 
 #### 消費者版（`build_consumer_prompt`）
 
-輸出純文字，對應前端服務詳情頁的「評價摘要」區塊：
+分析**近一週**評價，輸出一段純文字，對應前端服務詳情頁的「評價摘要」區塊：
 
-- 整體評分（平均分 + 評價筆數）
-- 服務亮點（2~4 點）
-- 注意事項（1~3 點，無負評可略）
-- 一句話總結
+- 一段精簡但具體的反饋文字，繁體中文，≤120 字
+- 近一週無評價時，自動 fallback 到最近至多 20 則歷史評價，並在摘要開頭說明來源（例如：「以下摘要來自歷史評價，非本週最新資料。」）
+- 完全無任何評價資料時輸出：「目前尚無評價資料。」
 
 #### 商家版（`build_merchant_prompt`）
 
@@ -151,7 +150,8 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 | 廠商營運與服務優化建議 | `suggestions` | 3~4 點陣列，每點 ≤20 字 |
 | 客戶情緒/滿意度標籤 | `sentiment_stats` | 依 overall_rating：4~5=正面、3=中立、1~2=負面 |
 
-本週無評價時，`summary` 為「本週尚無新評價資料。」，`suggestions` 給通用建議，`sentiment_stats` 全為 0。
+本週無評價時，consumer 和 merchant 皆自動 fallback 到最近至多 20 則歷史評價，
+LLM 摘要開頭會說明資料來源非近期；完全無任何評價時輸出固定字串。
 
 ---
 
@@ -171,8 +171,8 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 |---|---|
 | `service_vendor_id` | 所屬商家 ID |
 | `service_name` | 服務項目名稱 |
-| `summary_content` | LLM 產生的純文字口碑摘要 |
-| `source_review_count` | 全部評價總數 |
+| `summary_content` | LLM 產生的近一週口碑摘要（純文字，≤120 字） |
+| `source_review_count` | 全部評價總數（用於 `is_stale` 判斷） |
 | `source_avg_rating` | 全部評價平均分 |
 | `generate_status` | `"02"`（已完成） |
 | `ai_model` | 使用的 model ID |
@@ -199,26 +199,14 @@ EventBridge Scheduler（每週一 09:00 台灣時間）
 
 > Function URL 受 workshop SCP 封鎖（403 Forbidden），使用 AWS CLI invoke。
 
-### 跑單一商家（demo 推薦）
+### 只跑所有服務摘要（消費者）
 
 ```bash
 aws lambda invoke \
   --function-name aiwave-review-summary \
   --region us-west-2 \
   --profile agentic-home-hub \
-  --payload "{\"mode\":\"merchant\",\"vendor_id\":\"1\"}" \
-  --cli-binary-format raw-in-base64-out \
-  out.json && cat out.json
-```
-
-### 跑單一服務（消費者摘要）
-
-```bash
-aws lambda invoke \
-  --function-name aiwave-review-summary \
-  --region us-west-2 \
-  --profile agentic-home-hub \
-  --payload "{\"mode\":\"consumer\",\"service_id\":\"1\"}" \
+  --payload "{\"mode\":\"consumer\"}" \
   --cli-binary-format raw-in-base64-out \
   out.json && cat out.json
 ```
@@ -296,12 +284,14 @@ AWS Console → CloudWatch → Log groups → /aws/lambda/aiwave-review-summary
 
 | 調整項目 | 位置 | 說明 |
 |---|---|---|
-| 消費者輸出段落 | `build_consumer_prompt` 內 `## 輸出格式要求` | 增減輸出欄位 |
+| 消費者輸出規則 | `build_consumer_prompt` 內 `## 輸出規則` | 修改字數限制、fallback 說明邏輯 |
 | 商家 JSON 結構 | `build_merchant_prompt` 內 `## 輸出格式要求` | 增減 JSON 欄位（同步更新 handler.py + docstring） |
-| summary 字數限制 | prompt 規則區 | 目前 ≤125 字 |
+| 消費者 summary 字數限制 | prompt 規則區 | 目前 ≤120 字 |
+| 商家 summary 字數限制 | prompt 規則區 | 目前 ≤125 字 |
 | suggestions 字數限制 | prompt 規則區 | 目前每點 ≤20 字，3~4 點 |
 | 評價格式（服務名稱） | `_format_reviews_for_prompt` | 目前顯示服務名稱，可調整欄位 |
-| 近一週天數 | `handler.py` `_run_merchant_summaries` 的 `timedelta(days=7)` | 可改為 14 天等 |
+| 近一週天數 | `handler.py` `_run_consumer_summaries` 與 `_run_merchant_summaries` 的 `timedelta(days=7)` | 可改為 14 天等（consumer 與 merchant 需分別修改） |
+| Fallback 筆數上限 | `handler.py` 兩個 `_run_*_summaries` 內的 `[:20]` | 目前最多取 20 則歷史評價 |
 
 ### EventBridge 排程
 
@@ -344,5 +334,5 @@ bash deploy_lambda.sh
 | Function URL 被 SCP 封鎖 | Workshop 帳號封鎖公開 Lambda URL，只能用 CLI invoke 或 Console Test |
 | 無身分驗證 | Lambda 直接打 BFF 端點，無 token，與整體平台現況一致 |
 | 無回滾機制 | 中途失敗不會回滾前面已完成的摘要 |
-| 商家摘要近一週篩選在 Lambda 側 | 拉回全部評價後才過濾，非在 DB 層篩選，資料量大時效率較低 |
+| 消費者摘要近一週篩選在 Lambda 側 | 拉回全部評價後才過濾（consumer 與 merchant 共用相同邏輯），非在 DB 層篩選，資料量大時效率較低 |
 | Windows CLI log 查詢 | `aws logs tail` 路徑格式問題，改用 Console |

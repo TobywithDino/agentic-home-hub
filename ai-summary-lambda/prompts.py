@@ -8,40 +8,34 @@ Review summary prompt templates.
 """
 
 
-def build_consumer_prompt(service_name: str, reviews: list[dict]) -> str:
+def build_consumer_prompt(service_name: str, reviews: list[dict], week_start: str, week_end: str, data_note: str = "") -> str:
     """
     給消費者看的摘要 prompt。
-    重點：正負評平衡、客觀呈現、讓潛在消費者快速判斷是否適合自己。
+    分析近一週的評價（若無則取最近至多 20 則），輸出一段精簡但具體的反饋文字（繁體中文，≤120 字）。
+
+    data_note: 資料來源說明，例如「以下為非近期一週內最近 8 則評價」，由 handler 傳入。
     """
     review_lines = _format_reviews_for_prompt(reviews)
+    note_line = f"\n> {data_note}\n" if data_note else ""
 
-    return f"""你是一個社區服務評價分析助手。以下是「{service_name}」這個服務項目的用戶評價資料。
-
-請根據這些評價，產生一份給**潛在消費者**閱讀的服務口碑摘要，幫助他們決定是否使用此服務。
+    return f"""你是一個社區服務評價分析助手。以下是「{service_name}」在 {week_start} 至 {week_end} 這一週內的用戶評價資料。
+{note_line}
+請根據這些評價，用**繁體中文**寫一段精簡但具體的服務反饋摘要，幫助潛在消費者快速了解這個服務近期的真實口碑。
 
 ## 評價資料
 
 {review_lines}
 
-## 輸出格式要求
+## 輸出規則
 
-請用繁體中文輸出，結構如下：
-
-**整體評分**：（計算平均分並說明，例如：4.2 / 5.0，共 N 筆評價）
-
-**服務亮點**：
-- 列出 2~4 個消費者最常提到的正面優點
-
-**注意事項**：
-- 列出 1~3 個消費者反映的缺點或需要注意的地方（若無負評可略）
-
-**一句話總結**：
-用一句話幫潛在消費者總結是否值得嘗試。
-
-注意：若評價數量不足（少於 3 筆），請說明資料量有限，摘要僅供參考。"""
+1. 只輸出一段純文字，不要有標題、條列、markdown 格式
+2. **不超過 120 字**（含標點）
+3. 內容須具體，提及評分高低、顧客實際反應、明顯的優點或缺點
+4. 若資料來源為非近期評價，開頭須說明（例如：「以下摘要來自歷史評價，非本週最新資料。」）
+5. 若完全無任何評價資料，直接輸出：「目前尚無評價資料。」"""
 
 
-def build_merchant_prompt(vendor_name: str, reviews: list[dict], week_start: str, week_end: str, service_names: dict[int, str] | None = None) -> str:
+def build_merchant_prompt(vendor_name: str, reviews: list[dict], week_start: str, week_end: str, service_names: dict[int, str] | None = None, data_note: str = "") -> str:
     """
     給商家看的 AI 智慧洞察 prompt。
     輸出結構化 JSON，對應 UI 三個區塊：
@@ -50,11 +44,13 @@ def build_merchant_prompt(vendor_name: str, reviews: list[dict], week_start: str
     - sentiment_stats: 客戶情緒統計（positive / neutral / negative 筆數）
 
     service_names: {service_id: service_name}，有傳入時評價區塊顯示服務名稱而非 ID
+    data_note: 資料來源說明，例如「以下為非近期一週內最近 8 則評價」，由 handler 傳入。
     """
     review_lines = _format_reviews_for_prompt(reviews, service_names=service_names)
+    note_line = f"\n> {data_note}\n" if data_note else ""
 
     return f"""你是一個社區服務平台的 AI 分析助手。以下是「{vendor_name}」在 {week_start} 至 {week_end} 這一週內收到的客戶評價資料。
-
+{note_line}
 ## 評價資料
 
 {review_lines}
@@ -81,9 +77,10 @@ def build_merchant_prompt(vendor_name: str, reviews: list[dict], week_start: str
 
 規則：
 1. summary 輸出一段摘要，繁體中文，**至多 125 字**（含標點）
-2. suggestions 3~4 點，每點繁體中文，**至多 20 字**（含標點），基於本週評價給出具體可執行的建議
-3. sentiment_stats 依 overall_rating 分類：4~5 分為正面、3 分為中立、1~2 分為負面
-4. 若本週無任何評價，summary 改為「本週尚無新評價資料。」，suggestions 給通用建議，sentiment_stats 全填 0"""
+2. 若資料來源為非近期評價，summary 開頭須說明（例如：「以下摘要來自歷史評價，非本週最新資料。」）
+3. suggestions 3~4 點，每點繁體中文，**至多 20 字**（含標點），基於評價給出具體可執行的建議
+4. sentiment_stats 依 overall_rating 分類：4~5 分為正面、3 分為中立、1~2 分為負面
+5. 若完全無任何評價資料，summary 改為「目前尚無評價資料。」，suggestions 給通用建議，sentiment_stats 全填 0"""
 
 
 def _format_reviews_for_prompt(reviews: list[dict], service_names: dict[int, str] | None = None) -> str:
