@@ -10,6 +10,10 @@ import 'package:ai_butler_app/design_system/components/skeletons.dart';
 import 'package:ai_butler_app/design_system/components/stagger.dart';
 import 'package:ai_butler_app/design_system/theme_extensions.dart';
 import 'package:ai_butler_app/domain/models/domain_models.dart';
+import 'package:ai_butler_app/features/tour/tour_anchors.dart';
+import 'package:ai_butler_app/features/tour/tour_leg_host.dart';
+import 'package:ai_butler_app/features/tour/tour_plan.dart';
+import 'package:ai_butler_app/features/tour/tour_session.dart';
 import 'package:ai_butler_app/features/vendor/vendor_filter_panel.dart';
 import 'package:ai_butler_app/providers/vendor_providers.dart';
 import 'package:ai_butler_app/router/routes.dart';
@@ -218,6 +222,8 @@ class _VendorListScreenState extends ConsumerState<VendorListScreen> {
                 ),
               ),
               data: (page) {
+                // 卡片渲染完才有錨點可圈
+                _maybeStartVendorListTour(context, ref, _loadedItems);
                 if (_loadedItems.isEmpty) {
                   return _EmptyState(
                     onClearFilter: filterCount > 0
@@ -251,6 +257,10 @@ class _VendorListScreenState extends ConsumerState<VendorListScreen> {
                       itemCount: _loadedItems.length,
                       enabled: currentQuery.page == 1, // 第一頁才播動畫
                       child: _VendorCard(
+                        // 導覽錨點：用來圈出管家推薦的那一家
+                        key: ref
+                            .read(tourAnchorsProvider)
+                            .of(TourAnchorIds.vendorCard(vendor.vendorId)),
                         vendor: vendor,
                         onTap: () => context.push(
                           // 帶上當前瀏覽的服務類型，詳情頁只列該類型的服務。
@@ -270,6 +280,51 @@ class _VendorListScreenState extends ConsumerState<VendorListScreen> {
       ),
     );
   }
+}
+
+/// 啟動導覽第二段：圈出管家推薦的那一家。
+///
+/// 那家不在目前列表裡就結束 session —— 可能是使用者自己改了篩選條件，
+/// 或分頁還沒載到它。與其把使用者留在一個不會出現的光圈前面，不如收掉。
+void _maybeStartVendorListTour(
+  BuildContext context,
+  WidgetRef ref,
+  List<VendorSummary> vendors,
+) {
+  final session = ref.read(tourSessionProvider);
+  if (session == null || session.leg != TourLeg.vendorList) return;
+
+  final card = session.card;
+  final anchors = ref.read(tourAnchorsProvider);
+
+  maybeStartTourLeg(
+    ref: ref,
+    context: context,
+    leg: TourLeg.vendorList,
+    buildSteps: () {
+      final target =
+          vendors.where((v) => v.vendorId == card.vendorId).firstOrNull;
+      if (target == null) {
+        // vendorId 為 0 幾乎都是 agent 還沒重新部署（草稿沒帶 vendor_id）。
+        tourLog(card.vendorId == 0
+            ? '草稿沒有 vendor_id，agent 可能還沒重新部署'
+            : '列表裡找不到 vendor_id=${card.vendorId}'
+                '（現有：${vendors.map((v) => v.vendorId).join(",")}）');
+        return null;
+      }
+      return TourPlan.vendorListLeg(
+        vendorAnchor: anchors.of(TourAnchorIds.vendorCard(target.vendorId)),
+        vendorName: target.name,
+        onTap: () {
+          ref.read(tourSessionProvider.notifier).advanceTo(TourLeg.vendorDetail);
+          context.push(Routes.vendorDetail(
+            target.vendorId,
+            serviceType: card.serviceType,
+          ));
+        },
+      );
+    },
+  );
 }
 
 class _EmptyState extends StatelessWidget {
@@ -305,7 +360,7 @@ class _EmptyState extends StatelessWidget {
 }
 
 class _VendorCard extends StatelessWidget {
-  const _VendorCard({required this.vendor, required this.onTap});
+  const _VendorCard({super.key, required this.vendor, required this.onTap});
 
   final VendorSummary vendor;
   final VoidCallback onTap;

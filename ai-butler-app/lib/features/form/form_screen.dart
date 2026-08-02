@@ -8,8 +8,15 @@ import 'package:ai_butler_app/design_system/app_spacing.dart';
 import 'package:ai_butler_app/design_system/app_typography.dart';
 import 'package:ai_butler_app/design_system/components/async_value_widget.dart';
 import 'package:ai_butler_app/design_system/theme_extensions.dart';
+import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
+
+import 'package:ai_butler_app/domain/logic/draft_prefill_mapper.dart';
 import 'package:ai_butler_app/domain/logic/form_validator.dart';
 import 'package:ai_butler_app/domain/logic/quotation_calculator.dart';
+import 'package:ai_butler_app/features/tour/tour_anchors.dart';
+import 'package:ai_butler_app/features/tour/tour_plan.dart';
+import 'package:ai_butler_app/features/tour/tour_runner.dart';
+import 'package:ai_butler_app/providers/butler_draft_provider.dart';
 import 'package:ai_butler_app/domain/models/domain_models.dart';
 import 'package:ai_butler_app/domain/models/answer_value.dart';
 import 'package:ai_butler_app/domain/models/form_answers.dart';
@@ -43,10 +50,101 @@ class _FormScreenState extends ConsumerState<FormScreen> {
   Timer? _draftTimer;
   bool _draftChecked = false;
 
+  /// 錨點取自跨畫面共用的 [TourAnchors]，不自己持有 map。
+  ///
+  /// 一套機制到底：導覽從首頁一路走到這裡，錨點都在同一份登記表。
+  /// 登記表會快取 GlobalKey，所以每次 build 拿到的是同一個實例 ——
+  /// 換新 key 的話導覽跑到一半就會找不到原來的 widget。
+  GlobalKey _anchorFor(int topicId) =>
+      ref.read(tourAnchorsProvider).of(TourAnchorIds.formTopic(topicId));
+
+  GlobalKey get _submitAnchor =>
+      ref.read(tourAnchorsProvider).of(TourAnchorIds.formSubmit);
+
+  /// 管家草稿只處理一次。
+  ///
+  /// `build` 會因為 answers 變動而重跑，不擋的話每次都重新套預填，
+  /// 使用者改過的值會被蓋回去，導覽也會反覆彈出來。
+  bool _draftHandled = false;
+
+  TutorialCoachMark? _tutorial;
+
   @override
   void dispose() {
     _draftTimer?.cancel();
+    // 導覽用 Overlay，畫面關掉時沒收掉會留在螢幕上
+    _tutorial?.finish();
     super.dispose();
+  }
+
+  /// 套用 AI 管家的草稿，必要時啟動導覽。
+  ///
+  /// 預填由這裡做、導覽只負責解說，是刻意的分工：讓導覽逐欄位寫值的話，
+  /// 使用者在導覽中途自己改的內容會被下一步覆蓋回去。
+  void _applyButlerDraft(FormDefinition definition) {
+    if (_draftHandled) return;
+
+    final pending = ref.read(pendingButlerDraftProvider);
+    if (pending == null) return;
+    // 草稿是給另一張表單的（使用者中途自己跳去別的表單），不要套。
+    if (pending.card.formId != definition.formId) return;
+
+    _draftHandled = true;
+
+    final result = DraftPrefillMapper.map(
+      definition: definition,
+      answers: pending.card.answers,
+      payload: pending.card.payload,
+    );
+
+    if (result.prefill.isNotEmpty) {
+      ref
+          .read(formAnswersProvider(definition.formId).notifier)
+          .applyPrefill(result.prefill);
+    }
+
+    // 用完就清，否則使用者之後自己從服務項目頁進同一張表單會又被套一次
+    ref.read(pendingButlerDraftProvider.notifier).clear();
+
+    if (!pending.startTour) {
+      if (result.prefill.isNotEmpty) {
+        _showPrefillNotice(result);
+      }
+      return;
+    }
+
+    // 等預填渲染完、錨點掛載好才啟動導覽。
+    // 直接呼叫的話 GlobalKey.currentContext 全是 null，導覽會整個跳掉。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _tutorial = TourRunner.start(
+        context,
+        TourPlan.forForm(
+          definition: definition,
+          prefill: result,
+          topicAnchors: <int, GlobalKey>{
+            for (final t in definition.allTopics) t.topicId: _anchorFor(t.topicId),
+          },
+          submitAnchor: _submitAnchor,
+        ),
+        onFinish: () => _tutorial = null,
+      );
+    });
+  }
+
+  /// 只做預填、不跑導覽時，用 SnackBar 交代一下狀況。
+  void _showPrefillNotice(DraftPrefillResult result) {
+    final unfilled = result.unresolved.length;
+    final message = unfilled == 0
+        ? '管家已幫你填好 ${result.prefill.length} 題，確認後送出'
+        : '管家已幫你填好 ${result.prefill.length} 題，還有 $unfilled 題要你自己選';
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+      );
+    });
   }
 
   /// 1 秒 debounce 自動存草稿（Requirement 8.9）。
@@ -121,12 +219,18 @@ class _FormScreenState extends ConsumerState<FormScreen> {
           value: definitionAsync,
           onRetry: () => ref.invalidate(formDefinitionProvider(widget.formId)),
           data: (definition) {
-            // 首次進入時檢查草稿
-            WidgetsBinding.instance
-                .addPostFrameCallback((_) => _checkDraft(definition));
+            // 管家草稿優先於本機草稿：使用者剛剛才在對話裡確認過內容，
+            // 這時跳「要繼續上次的草稿嗎」只會讓他困惑。
+            _applyButlerDraft(definition);
+            if (!_draftHandled) {
+              // 首次進入時檢查本機草稿
+              WidgetsBinding.instance
+                  .addPostFrameCallback((_) => _checkDraft(definition));
+            }
             return _FormBody(
               definition: definition,
               errors: _errors,
+              anchorFor: _anchorFor,
               onErrorsChanged: (errors) => setState(() => _errors = errors),
               onAnswerChanged: () => _scheduleDraftSave(definition),
             );
@@ -136,6 +240,7 @@ class _FormScreenState extends ConsumerState<FormScreen> {
           data: (definition) => _SubmitBar(
             definition: definition,
             isSubmitting: _isSubmitting,
+            anchorKey: _submitAnchor,
             onSubmit: () => _submit(definition),
           ),
           orElse: () => null,
@@ -266,12 +371,16 @@ class _FormBody extends ConsumerWidget {
   const _FormBody({
     required this.definition,
     required this.errors,
+    required this.anchorFor,
     required this.onErrorsChanged,
     this.onAnswerChanged,
   });
 
   final FormDefinition definition;
   final ValidationErrors errors;
+
+  /// 取得某題的導覽錨點。由 State 持有，才不會每次 build 都換新 key。
+  final GlobalKey Function(int topicId) anchorFor;
   final void Function(ValidationErrors errors) onErrorsChanged;
   final VoidCallback? onAnswerChanged;
 
@@ -293,6 +402,7 @@ class _FormBody extends ConsumerWidget {
                 topic: topic,
                 answer: answers.answerOf(topic.topicId),
                 errorMessage: errors[topic.topicId],
+                anchorKey: anchorFor(topic.topicId),
                 onChanged: (value) {
                   notifier.setAnswer(topic.topicId, value);
                   onAnswerChanged?.call();
@@ -376,11 +486,15 @@ class _SubmitBar extends StatelessWidget {
     required this.definition,
     required this.isSubmitting,
     required this.onSubmit,
+    this.anchorKey,
   });
 
   final FormDefinition definition;
   final bool isSubmitting;
   final VoidCallback onSubmit;
+
+  /// 導覽最後一步的錨點（交棒點：讓使用者自己按送出）。
+  final GlobalKey? anchorKey;
 
   @override
   Widget build(BuildContext context) {
@@ -388,6 +502,7 @@ class _SubmitBar extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
         child: FilledButton(
+          key: anchorKey,
           onPressed: isSubmitting ? null : onSubmit,
           child: isSubmitting
               ? const SizedBox(

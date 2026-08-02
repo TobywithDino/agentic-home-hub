@@ -225,6 +225,8 @@ class HttpButlerAiService implements ButlerAiService {
         (event['payload'] as Map?)?.cast<String, dynamic>() ?? const {};
     final kind = event['kind'] as String? ?? 'feedback';
 
+    final submit = (event['submit'] as Map?)?.cast<String, dynamic>() ?? const {};
+
     if (kind == 'feedback') {
       final content =
           (payload['feedback_content'] as Map?)?.cast<String, dynamic>() ??
@@ -246,12 +248,18 @@ class HttpButlerAiService implements ButlerAiService {
           // agent 端已驗證必填題都齊了才會產生草稿，所以這裡是 0。
           remainingRequired: 0,
           summary: event['summary'] as String? ?? '已為你整理好表單內容',
+          draftId: event['draft_id'] as String? ?? '',
+          vendorId: _asInt(event['vendor_id']) ?? 0,
+          serviceType: event['service_type'] as String? ?? '',
+          answers: _parseFeedbackAnswers(content),
+          payload: payload,
+          submitMethod: submit['method'] as String? ?? 'POST',
+          submitPath: submit['path'] as String? ?? '/app-api/feedbacks',
         ),
       ];
     }
 
     final draftId = event['draft_id'] as String?;
-    final submit = (event['submit'] as Map?)?.cast<String, dynamic>() ?? const {};
     final path = submit['path'] as String?;
     if (draftId == null || path == null) {
       if (kDebugMode) {
@@ -271,6 +279,24 @@ class HttpButlerAiService implements ButlerAiService {
         payload: payload,
       ),
     ];
+  }
+
+  /// `feedback_content` → `topic_id` 對答案文字。
+  ///
+  /// agent 端的結構是 `{"<topic_id>": {"title": ..., "value": ...}}`（見
+  /// tools.py 的 propose_submission）。key 是字串化的 topic_id，
+  /// 所以要 parse 回 int 才能對上 `FormTopic.topicId`。
+  /// 解不出來的 key 直接跳過，不要讓一筆壞資料毀掉整張草稿。
+  static Map<int, String> _parseFeedbackAnswers(Map<String, dynamic> content) {
+    final out = <int, String>{};
+    content.forEach((key, raw) {
+      final topicId = int.tryParse(key);
+      if (topicId == null) return;
+      final value = raw is Map ? raw['value'] : raw;
+      if (value == null) return;
+      out[topicId] = value.toString();
+    });
+    return out;
   }
 
   Iterable<ButlerChunk> _mapUiComponent(Map<String, dynamic> event) {

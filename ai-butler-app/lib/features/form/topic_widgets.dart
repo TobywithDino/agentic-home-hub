@@ -22,12 +22,19 @@ class TopicFieldParams {
     required this.answer,
     required this.errorMessage,
     required this.onChanged,
+    this.anchorKey,
   });
 
   final FormTopic topic;
   final AnswerValue? answer;
   final String? errorMessage;
   final void Function(AnswerValue? value) onChanged;
+
+  /// AI 管家導覽用的錨點（`TourRunner` 依它定位光圈）。
+  ///
+  /// 掛在題目最外層的容器上，讓光圈把「題目標題 + 輸入元件 + 錯誤訊息」
+  /// 整塊圈起來，使用者才看得懂在講哪一題。非導覽情境傳 null 即可。
+  final GlobalKey? anchorKey;
 }
 
 Widget buildTopicWidget(BuildContext context, TopicFieldParams params) {
@@ -51,6 +58,7 @@ Widget buildTopicWidget(BuildContext context, TopicFieldParams params) {
   if (topic.type == TopicType.notice) return field;
 
   return Padding(
+    key: params.anchorKey,
     padding: const EdgeInsets.only(bottom: AppSpacing.md),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,

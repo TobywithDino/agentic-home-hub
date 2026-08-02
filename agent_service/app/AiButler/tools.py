@@ -765,6 +765,15 @@ async def propose_submission(
         for a in answers
     }
 
+    # 同一張草稿只產生一次。提示裡雖然已經寫了「不要重複產生」，但模型輸出
+    # 一律當不可信輸入 —— 實測它會在處理下一個需求時順手再 propose 一次，
+    # 使用者就看到兩張一模一樣的卡片。
+    signature = _draft_signature(
+        "feedback", int(args["form_id"]), sorted(feedback_content.items())
+    )
+    if existing := ctx.state.find_proposal(signature):
+        return _already_proposed(existing)
+
     service_type = str(args["service_type"])
     payload = {
         # feedback_no 由送出端產生，草稿階段不決定 —— 避免草稿放久了單號撞號
@@ -786,6 +795,7 @@ async def propose_submission(
         service_id=int(args["service_id"]),
         service_type=service_type,
         form_id=int(args["form_id"]),
+        vendor_id=int(args["vendor_id"]),
         payload=payload,
         summary=args["summary"],
         actor_id=ctx.actor_id,
@@ -795,11 +805,39 @@ async def propose_submission(
     )
     draft_store.put(draft)
     ctx.emit("draft", **draft.to_event_payload())
+    ctx.state.remember_proposal(
+        "feedback", signature, args["summary"], draft.draft_id
+    )
 
     return {
         "draft_id": draft.draft_id,
         "status": "awaiting_user_confirmation",
         "answered_topics": len(answers),
+    }
+
+
+def _draft_signature(kind: str, key: int | str, content: Any) -> str:
+    """草稿的內容指紋。
+
+    內容一樣就算同一張（使用者改了某個答案才算新草稿，那時本來就該重新產生）。
+    """
+    return f"{kind}|{key}|{content!r}"
+
+
+def _already_proposed(existing: dict[str, Any]) -> dict[str, Any]:
+    """回給模型的「已經產生過」說明。
+
+    刻意回成正常結果而不是 error：這不是模型傳錯參數，而是它多做了一次。
+    寫清楚卡片已經在畫面上、以及什麼情況才該重新產生，它就不會硬要再試。
+    """
+    return {
+        "draft_id": existing["draft_id"],
+        "status": "already_awaiting_user_confirmation",
+        "detail": (
+            f"這張草稿（{existing['summary']}）剛剛已經產生過，卡片就在畫面上，"
+            "不需要也不要再產生一次。直接接著回應使用者目前的需求就好。"
+            "只有在使用者要求修改內容時才重新呼叫（內容不同會算新的草稿）。"
+        ),
     }
 
 
@@ -1010,6 +1048,10 @@ async def propose_review(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
     }
     payload = {k: v for k, v in payload.items() if v is not None}
 
+    signature = _draft_signature("review", record_id, sorted(payload.items(), key=str))
+    if existing := ctx.state.find_proposal(signature):
+        return _already_proposed(existing)
+
     draft = OrderDraft(
         kind="review",
         service_id=order.get("service_id"),
@@ -1023,6 +1065,7 @@ async def propose_review(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
     )
     draft_store.put(draft)
     ctx.emit("draft", **draft.to_event_payload())
+    ctx.state.remember_proposal("review", signature, draft.summary, draft.draft_id)
 
     return {
         "draft_id": draft.draft_id,
@@ -1101,6 +1144,10 @@ async def propose_profile_update(
         f"{labels[k]}改成 {c['to']}" for k, c in changes.items()
     )
 
+    signature = _draft_signature("profile", ctx.actor_id, sorted(fields.items()))
+    if existing := ctx.state.find_proposal(signature):
+        return _already_proposed(existing)
+
     draft = OrderDraft(
         kind="profile",
         payload={k: c["to"] for k, c in changes.items()},
@@ -1113,6 +1160,7 @@ async def propose_profile_update(
     draft_store.put(draft)
     # changes 讓 App 的確認卡片能顯示前後對照，不用自己再查一次
     ctx.emit("draft", changes=changes, **draft.to_event_payload())
+    ctx.state.remember_proposal("profile", signature, summary, draft.draft_id)
 
     return {
         "draft_id": draft.draft_id,

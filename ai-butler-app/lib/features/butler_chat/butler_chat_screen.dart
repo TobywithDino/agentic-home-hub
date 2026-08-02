@@ -8,6 +8,9 @@ import 'package:ai_butler_app/design_system/app_spacing.dart';
 import 'package:ai_butler_app/design_system/app_typography.dart';
 import 'package:ai_butler_app/design_system/theme_extensions.dart';
 import 'package:ai_butler_app/domain/services/butler_ai_service.dart';
+import 'package:ai_butler_app/features/butler_chat/draft_action_sheet.dart';
+import 'package:ai_butler_app/features/tour/tour_leg_host.dart';
+import 'package:ai_butler_app/features/tour/tour_session.dart';
 import 'package:ai_butler_app/providers/ai_providers.dart';
 import 'package:ai_butler_app/router/routes.dart';
 
@@ -83,7 +86,14 @@ class _ButlerChatScreenState extends ConsumerState<ButlerChatScreen> {
                   VendorCard() ||
                   PrefillCard() ||
                   DraftCard():
-              botMessage.cards = [...botMessage.cards, chunk];
+              // 同一張草稿卡在同一段對話裡只顯示一次。
+              //
+              // agent 端已經有防重複，但它的工作集存在 process 記憶體，
+              // AgentCore Runtime 實例被回收後就消失，那時模型會重新產生。
+              // 這裡再擋一層，讓使用者不會看到兩張一樣的卡片。
+              if (!_isDuplicateCard(chunk)) {
+                botMessage.cards = [...botMessage.cards, chunk];
+              }
           }
         });
         _scrollToBottom();
@@ -98,6 +108,32 @@ class _ButlerChatScreenState extends ConsumerState<ButlerChatScreen> {
       },
     );
   }
+
+  /// 這張卡片在本段對話裡是否已經出現過。
+  ///
+  /// 只對草稿卡做（服務商卡重複出現是合理的 —— 使用者可能又問了一次同一類服務）。
+  /// 比對的是「內容」而不是 draft_id：agent 每次產生都是新的 draft_id，
+  /// 用 id 比對等於沒擋。
+  bool _isDuplicateCard(ButlerChunk card) {
+    final signature = _cardSignature(card);
+    if (signature == null) return false;
+
+    for (final message in _messages) {
+      for (final existing in message.cards) {
+        if (_cardSignature(existing) == signature) return true;
+      }
+    }
+    return false;
+  }
+
+  /// 草稿卡的內容指紋。非草稿卡回 null（不做去重）。
+  static String? _cardSignature(ButlerChunk card) => switch (card) {
+        PrefillCard(formId: final f, answers: final a) =>
+          'feedback|$f|${(a.entries.map((e) => '${e.key}=${e.value}').toList()..sort()).join('|')}',
+        DraftCard(kind: final k, submitPath: final p, payload: final payload) =>
+          '$k|$p|$payload',
+        _ => null,
+      };
 
   void _retry() {
     if (_messages.isEmpty) return;
@@ -166,14 +202,37 @@ class _ButlerChatScreenState extends ConsumerState<ButlerChatScreen> {
     );
   }
 
+  /// 開草稿卡的分叉點，並在使用者選「帶我操作一遍」時啟動導覽。
+  ///
+  /// 導覽的啟動放在這裡而不是 sheet 裡：sheet 一旦 pop，它的 State 就開始
+  /// 銷毀，用那個 ref 改 provider 會安靜地失效。聊天畫面是 shell 分頁，
+  /// 全程都活著，是安全的發起點。
+  Future<void> _openDraftSheet(PrefillCard card) async {
+    final action = await showPrefillDraftSheet(context, card);
+    if (action != DraftSheetAction.guide || !mounted) return;
+
+    tourLog('開始導覽：service_type=${card.serviceType} '
+        'vendor_id=${card.vendorId} form_id=${card.formId}');
+
+    // 先切到首頁再啟動 session。反過來的話，session 一變動首頁就會重新
+    // build 並排入啟動光圈的 postFrame，但那時畫面還在聊天室 ——
+    // IndexedStack 的分頁即使沒顯示也已完成 layout，光圈會用正確座標畫在
+    // 錯誤的畫面上。
+    context.go(Routes.home);
+    ref.read(tourSessionProvider.notifier).start(card);
+  }
+
   void _handleCardTap(ButlerChunk card) {
     switch (card) {
       case CategoryCard(serviceId: final id):
         context.push('${Routes.vendors}?serviceId=$id');
       case VendorCard(vendorId: final id):
         context.push(Routes.vendorDetail(id));
-      case PrefillCard(formId: final id):
-        context.push(Routes.form(id));
+      // 諮詢單草稿：跳出「直接送出 / 帶我操作一遍」讓使用者選。
+      // 不直接 push 到表單頁 —— 那樣就少掉了「直接送出」這條路，
+      // 使用者明明已經在對話裡確認過內容，還要再填一次表單。
+      case PrefillCard():
+        _openDraftSheet(card);
       // 管家沒有寫入權限，草稿要由使用者自己在 GUI 上送出，
       // 所以這裡只負責把他帶到能完成這件事的畫面。
       case DraftCard(kind: final kind):
@@ -348,7 +407,11 @@ class _CardWidget extends StatelessWidget {
           n,
           d
         ),
-      PrefillCard(summary: final s) => (Icons.edit_note_outlined, '表單已預填', s),
+      PrefillCard(summary: final s) => (
+          Icons.edit_note_outlined,
+          '諮詢單・請確認',
+          s
+        ),
       DraftCard(kind: final k, kindLabel: final l, summary: final s) => (
           k == 'profile'
               ? Icons.person_outline
