@@ -20,6 +20,38 @@ export interface OrderTrend {
 
 export type FeedbackStatus = '待處理' | '已接單' | '已拒絕'
 
+/**
+ * 諮詢單裡的單一題目作答（依該筆諮詢單所屬表單版本的結構還原）
+ *
+ * 每張表單的題目組成都不同，因此詳細頁不寫死欄位，
+ * 而是照著表單的題組／題目順序逐題呈現。
+ */
+export interface FeedbackAnswerItem {
+  /** 對應 pms_form_topic.id */
+  topicId?: number
+  /** 題目標題；表單結構取不到時退回型別名稱 */
+  title: string
+  /** 題目型別，供 UI 決定呈現方式（選擇題用 Badge、照片顯示張數…） */
+  inputType?: FieldInputType
+  /** 題目的補充說明（表單的 remark） */
+  hint?: string
+  isRequired?: boolean
+  /** 可讀答案；複選會有多筆 */
+  values: string[]
+  /** 照片題的張數（後端只存路徑，商家無法直接檢視） */
+  photoCount?: number
+  /** 表單有這題但顧客沒有作答 */
+  unanswered?: boolean
+}
+
+/** 諮詢單作答的題組區塊，順序與表單原始定義一致 */
+export interface FeedbackAnswerSection {
+  /** 對應 pms_form_group.id */
+  groupId?: number
+  groupName?: string
+  items: FeedbackAnswerItem[]
+}
+
 export interface FormFeedback {
   id: string // feedback_no
   contactName: string
@@ -36,6 +68,15 @@ export interface FormFeedback {
   declineReason?: string
   /** 所屬服務項目 ID（後端 service_id），供依服務篩選用 */
   serviceId?: number
+  /** 該筆諮詢單所屬的表單版本 id（表單為版本化設計，每次修改會產生新 id） */
+  formId?: number
+  /**
+   * 依表單結構還原的作答內容
+   *
+   * 有值時詳細頁改用「照表單逐題呈現」，取代單一段落的客戶描述。
+   * 表單結構載入失敗（或該版本已不存在）時為 undefined，退回 content 文字。
+   */
+  answerSections?: FeedbackAnswerSection[]
 }
 
 // ─── mms_order_record (訂單 - 成交後：正式交易與履約階段) ───

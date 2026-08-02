@@ -498,6 +498,32 @@ interface ParsedFeedbackContent {
   detectedPhone?: string
   detectedEmail?: string
   detectedAddress?: string
+  /** 依表單結構還原的逐題作答（表單結構取不到時為 undefined） */
+  answerSections?: mock.FeedbackAnswerSection[]
+}
+
+/**
+ * 新舊格式解析後的中間表示：一題一筆
+ *
+ * 兩種 feedback_content 格式差異很大，但拆完之後都能收斂成
+ * 「題目 id + 型別 + 可讀答案」，後續的文字組裝、聯絡人辨識、
+ * 依表單順序分組都共用同一套邏輯。
+ */
+interface TopicAnswerParsed {
+  topicId?: number
+  /** 正規化型別代碼 "1"~"10" */
+  type?: string
+  /** 可讀答案；複選會有多筆 */
+  texts: string[]
+  /** 照片題張數 */
+  photoCount?: number
+  /** 聯絡型題目（8 / 10）解析出的結構化欄位 */
+  contact?: {
+    name?: string
+    phone?: string
+    email?: string
+    address?: string
+  }
 }
 
 /**
@@ -651,13 +677,78 @@ function contactValueToParts(value: unknown): {
   }
 }
 
-/**
- * 解析新版 answers 陣列
- *
- * 標籤優先序與舊版一致：真實題目標題 → 型別名稱 → 無標籤。
- */
-function parseNewFormatAnswers(
+/** 把新版 answers 陣列拆成逐題的中間表示 */
+function extractNewFormatAnswers(
   answers: ApiFeedbackNewAnswer[],
+  lookup?: FormLookup
+): TopicAnswerParsed[] {
+  return answers.map((a) => {
+    const type = normalizeTopicType(a.type)
+    const base: TopicAnswerParsed = { topicId: a.topic_id, type, texts: [] }
+
+    // 照片：value 是檔名／路徑陣列，對商家沒有閱讀價值，以張數表示
+    if (type === '6') {
+      return {
+        ...base,
+        photoCount: Array.isArray(a.value) ? a.value.length : a.value ? 1 : 0,
+      }
+    }
+    // 選擇題：把 option_id 還原成選項名稱
+    if (CHOICE_TOPIC_TYPES.includes(type)) {
+      return { ...base, texts: choiceValueToTexts(a.value, lookup?.optionNames) }
+    }
+    // 地區選單
+    if (type === '5') {
+      const text = regionValueToText(a.value)
+      return { ...base, texts: text ? [text] : [], contact: text ? { address: text } : undefined }
+    }
+    // 聯絡資料：保留結構化欄位供聯絡人辨識
+    if (type === '8' || type === '10') {
+      const parts = contactValueToParts(a.value)
+      return {
+        ...base,
+        texts: parts.text ? [parts.text] : [],
+        contact: {
+          name: parts.name,
+          phone: parts.phone,
+          email: parts.email,
+          address: parts.address,
+        },
+      }
+    }
+    // 其餘型別（簡答／詳答／備註／日期）value 為純量
+    const text = scalarValueToText(a.value)
+    return { ...base, texts: text ? [text] : [] }
+  })
+}
+
+/** 把舊版 data 陣列拆成逐題的中間表示 */
+function extractOldFormatAnswers(topics: ApiFeedbackTopicAnswer[]): TopicAnswerParsed[] {
+  return topics.map((t) => {
+    const type = normalizeTopicType(t.type)
+    const answers = [...(t.answerList ?? [])].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+    return {
+      topicId: t.topicId,
+      type,
+      texts: answers.map((a) => answerToText(a, type)).filter(Boolean),
+      photoCount: type === '6' ? answers.length : undefined,
+    }
+  })
+}
+
+/**
+ * 由逐題的中間表示產出詳細頁需要的所有資料
+ *
+ * 產出：
+ *   content         → 多行「題目：答案」文字（沿用舊行為，也是接單時存入
+ *                     訂單 vendor_data 的內容）
+ *   selectedOptions → 僅選擇題答案，供 Badge 顯示
+ *   answerSections  → 依表單的題組／題目原始順序排好的逐題作答，
+ *                     讓每張表單的詳細頁呈現都跟著自己的結構走
+ *   detected*       → 從答案辨識出的聯絡資訊（外層 contact_* 常只有 hash）
+ */
+function summarizeAnswers(
+  entries: TopicAnswerParsed[],
   lookup?: FormLookup
 ): ParsedFeedbackContent {
   const lines: string[] = []
@@ -667,62 +758,113 @@ function parseNewFormatAnswers(
   let detectedEmail: string | undefined
   let detectedAddress: string | undefined
 
-  for (const a of answers) {
-    const type = normalizeTopicType(a.type)
-    const realTitle = a.topic_id != null ? lookup?.topicTitles.get(a.topic_id) : undefined
-    const typeLabel = type ? mock.FIELD_INPUT_TYPE_LABELS[mapTopicType(type)] : undefined
-    const label = realTitle ?? typeLabel
+  /** topicId → 作答，供依表單順序組裝 */
+  const byTopic = new Map<number, TopicAnswerParsed>()
 
-    // 照片：value 是檔名／路徑陣列，對商家沒有閱讀價值，以張數表示
-    if (type === '6') {
-      const count = Array.isArray(a.value) ? a.value.length : a.value ? 1 : 0
-      if (count > 0) lines.push(`${label ?? '照片'}：${count} 張`)
-      continue
-    }
+  const labelOf = (e: TopicAnswerParsed) => {
+    const realTitle = e.topicId != null ? lookup?.topicTitles.get(e.topicId) : undefined
+    const typeLabel = e.type ? mock.FIELD_INPUT_TYPE_LABELS[mapTopicType(e.type)] : undefined
+    return { realTitle, label: realTitle ?? typeLabel }
+  }
 
-    // 選擇題：還原選項名稱，同時供 Badge 使用
-    if (CHOICE_TOPIC_TYPES.includes(type)) {
-      const texts = choiceValueToTexts(a.value, lookup?.optionNames)
-      if (texts.length === 0) continue
-      const joined = texts.join('、')
+  for (const e of entries) {
+    if (e.topicId != null) byTopic.set(e.topicId, e)
+    const { realTitle, label } = labelOf(e)
+
+    // ── 文字摘要 ──
+    if ((e.photoCount ?? 0) > 0) {
+      lines.push(`${label ?? '照片'}：${e.photoCount} 張`)
+    } else if (e.texts.length > 0) {
+      const joined = e.texts.join('、')
       lines.push(label ? `${label}：${joined}` : joined)
-      options.push(...texts)
-      continue
+      if (e.type && CHOICE_TOPIC_TYPES.includes(e.type)) options.push(...e.texts)
     }
 
-    // 地區選單
-    if (type === '5') {
-      const text = regionValueToText(a.value)
-      if (!text) continue
-      lines.push(label ? `${label}：${text}` : text)
-      if (!detectedAddress) detectedAddress = text
+    // ── 聯絡資訊辨識：結構化欄位優先，沒有才用題目標題／格式猜 ──
+    if (e.contact) {
+      if (!detectedName && e.contact.name) detectedName = e.contact.name
+      if (!detectedPhone && e.contact.phone) detectedPhone = e.contact.phone
+      if (!detectedEmail && e.contact.email) detectedEmail = e.contact.email
+      if (!detectedAddress && e.contact.address) detectedAddress = e.contact.address
       continue
     }
-
-    // 聯絡資料：結構化欄位，直接餵給聯絡人辨識
-    if (type === '8' || type === '10') {
-      const parts = contactValueToParts(a.value)
-      if (parts.text) lines.push(label ? `${label}：${parts.text}` : parts.text)
-      if (!detectedName && parts.name) detectedName = parts.name
-      if (!detectedPhone && parts.phone) detectedPhone = parts.phone
-      if (!detectedEmail && parts.email) detectedEmail = parts.email
-      if (!detectedAddress && parts.address) detectedAddress = parts.address
-      continue
+    for (const text of e.texts) {
+      const byTitle = realTitle ?? ''
+      if (!detectedName && /姓名|聯絡人|稱謂/.test(byTitle)) detectedName = text
+      else if (!detectedPhone && /電話|手機|行動/.test(byTitle)) detectedPhone = text
+      else if (!detectedEmail && /email|信箱|郵件/i.test(byTitle)) detectedEmail = text
+      else if (!detectedAddress && /地址|地區|縣市/.test(byTitle)) detectedAddress = text
+      else if (!detectedEmail && text.includes('@')) detectedEmail = text
+      else if (!detectedPhone && /^0\d[\d-]{7,}$/.test(text)) detectedPhone = text
+      else if (
+        !detectedAddress &&
+        (e.type === '5' || text.length > 6) &&
+        /[縣市區鄉鎮路街]/.test(text)
+      )
+        detectedAddress = text
+      else if (!detectedName && !e.type && text.length <= 10 && !/\d/.test(text))
+        detectedName = text
     }
+  }
 
-    // 其餘型別（簡答／詳答／備註／日期）value 為純量
-    const text = scalarValueToText(a.value)
-    if (!text) continue
-    lines.push(label ? `${label}：${text}` : text)
+  // ── 依表單結構組裝逐題作答 ──
+  const formSections: mock.FeedbackAnswerSection[] = []
+  const consumed = new Set<number>()
 
-    // 沒有聯絡型題目時，退回以題目標題／格式判斷
-    const byTitle = realTitle ?? ''
-    if (!detectedName && /姓名|聯絡人|稱謂/.test(byTitle)) detectedName = text
-    else if (!detectedPhone && /電話|手機|行動/.test(byTitle)) detectedPhone = text
-    else if (!detectedEmail && /email|信箱|郵件/i.test(byTitle)) detectedEmail = text
-    else if (!detectedAddress && /地址|地區|縣市/.test(byTitle)) detectedAddress = text
-    else if (!detectedEmail && text.includes('@')) detectedEmail = text
-    else if (!detectedPhone && /^0\d[\d-]{7,}$/.test(text)) detectedPhone = text
+  for (const g of lookup?.groups ?? []) {
+    const items: mock.FeedbackAnswerItem[] = g.topics.map((t) => {
+      const ans = byTopic.get(t.id)
+      if (ans) consumed.add(t.id)
+      const inputType = mapTopicType(t.type)
+      const hasAnswer = (ans?.texts.length ?? 0) > 0 || (ans?.photoCount ?? 0) > 0
+      return {
+        topicId: t.id,
+        title: t.title || mock.FIELD_INPUT_TYPE_LABELS[inputType],
+        inputType,
+        hint: t.remark,
+        isRequired: t.isRequired,
+        values: ans?.texts ?? [],
+        photoCount: ans?.photoCount,
+        // 表單有這題但顧客沒填 → 明確標示，比整題消失更符合原表單
+        unanswered: !hasAnswer,
+      }
+    })
+    if (items.length > 0) {
+      formSections.push({ groupId: g.id, groupName: g.name, items })
+    }
+  }
+
+  // ⚠️ 一題都對不上時不能照表單鋪 —— 舊資料的 topic id 已被重建
+  // （實測 form 9 的 topics 從 95/97/98… 變成 136/146/147），
+  // 硬鋪會變成整張表單都「未填寫」，真正的答案卻擠在「其他作答」。
+  // 這種情況直接放棄表單結構，只呈現實際作答。
+  const hasAnswers = entries.some((e) => e.texts.length > 0 || (e.photoCount ?? 0) > 0)
+  const structureUsable = consumed.size > 0 || !hasAnswers
+  const sections: mock.FeedbackAnswerSection[] = structureUsable ? formSections : []
+  if (!structureUsable) consumed.clear()
+
+  // 表單結構裡找不到對應題目的作答 → 補一段，避免答案憑空消失
+  const leftovers = entries.filter(
+    (e) =>
+      (e.topicId == null || !consumed.has(e.topicId)) &&
+      (e.texts.length > 0 || (e.photoCount ?? 0) > 0)
+  )
+  if (leftovers.length > 0) {
+    sections.push({
+      groupName: sections.length > 0 ? '其他作答' : undefined,
+      items: leftovers.map((e) => {
+        const inputType = e.type ? mapTopicType(e.type) : undefined
+        return {
+          topicId: e.topicId,
+          title:
+            labelOf(e).label ??
+            (inputType ? mock.FIELD_INPUT_TYPE_LABELS[inputType] : '作答內容'),
+          inputType,
+          values: e.texts,
+          photoCount: e.photoCount,
+        }
+      }),
+    })
   }
 
   return {
@@ -732,6 +874,7 @@ function parseNewFormatAnswers(
     detectedPhone,
     detectedEmail,
     detectedAddress,
+    answerSections: sections.length > 0 ? sections : undefined,
   }
 }
 
@@ -751,16 +894,38 @@ function parseNewFormatAnswers(
  * 地區只給 county_code/district_code，因此除了題目標題，
  * 也必須一併備好「選項 id → 選項名稱」才還原得出答案。
  */
+/** 表單結構中的單一題目（已正規化，供詳細頁按表單順序呈現） */
+interface FormLookupTopic {
+  id: number
+  title: string
+  /** 正規化型別代碼 "1"~"10" */
+  type: string
+  remark?: string
+  isRequired: boolean
+  sort: number
+}
+
+/** 表單結構中的題組，題目已依 sort 排序 */
+interface FormLookupGroup {
+  id?: number
+  name?: string
+  sort: number
+  topics: FormLookupTopic[]
+}
+
 interface FormLookup {
   /** topic_id → 題目標題 */
   topicTitles: Map<number, string>
   /** option_id → 選項名稱 */
   optionNames: Map<number, string>
+  /** 依原始 sort 排序的題組（含各自的題目），供諮詢單詳細頁照表單呈現 */
+  groups: FormLookupGroup[]
 }
 
 const EMPTY_FORM_LOOKUP: FormLookup = {
   topicTitles: new Map<number, string>(),
   optionNames: new Map<number, string>(),
+  groups: [],
 }
 
 /** form_id → 該版本表單的查詢表 */
@@ -778,18 +943,49 @@ async function loadFormLookup(formId: number): Promise<FormLookup> {
 
   try {
     const full = await apiFetch<ApiFormFull>(`/merchant-api/forms/${formId}/full`)
-    const lookup: FormLookup = {
-      topicTitles: new Map<number, string>(),
-      optionNames: new Map<number, string>(),
-    }
+    const topicTitles = new Map<number, string>()
+    const optionNames = new Map<number, string>()
+
+    // 題組容器：以 form_group_id 分裝；沒有對應題組的題目歸到「未分組」(key null)
+    const byGroup = new Map<number | null, FormLookupTopic[]>()
+
+    // topics 為攤平陣列，各自以 form_group_id 指回題組
     for (const t of full.topics ?? []) {
       const title = (t.title ?? '').trim()
-      if (title) lookup.topicTitles.set(t.id, title)
+      if (title) topicTitles.set(t.id, title)
       for (const o of t.options ?? []) {
         const name = (o.option_name ?? '').trim()
-        if (name) lookup.optionNames.set(o.id, name)
+        if (name) optionNames.set(o.id, name)
+      }
+
+      const groupKey = typeof t.form_group_id === 'number' ? t.form_group_id : null
+      const bucket = byGroup.get(groupKey) ?? []
+      bucket.push({
+        id: t.id,
+        title,
+        type: normalizeTopicType(t.type),
+        remark: (t.remark ?? '').trim() || undefined,
+        isRequired: parseRequired(t.is_required),
+        sort: t.sort ?? 0,
+      })
+      byGroup.set(groupKey, bucket)
+    }
+
+    const groups: FormLookupGroup[] = []
+    for (const g of [...(full.groups ?? [])].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))) {
+      const topics = (byGroup.get(g.id) ?? []).sort((a, b) => a.sort - b.sort)
+      byGroup.delete(g.id)
+      if (topics.length > 0) {
+        groups.push({ id: g.id, name: (g.name ?? '').trim() || undefined, sort: g.sort ?? 0, topics })
       }
     }
+    // 剩下的（題組不在 groups 裡、或本來就沒有 form_group_id）補在最後，不遺漏題目
+    for (const [, topics] of byGroup) {
+      if (topics.length === 0) continue
+      groups.push({ sort: Number.MAX_SAFE_INTEGER, topics: topics.sort((a, b) => a.sort - b.sort) })
+    }
+
+    const lookup: FormLookup = { topicTitles, optionNames, groups }
     formLookupCache.set(formId, lookup)
     return lookup
   } catch (err) {
@@ -827,11 +1023,8 @@ function answerToText(a: ApiFeedbackAnswer, topicType?: string | null): string {
 /**
  * 解析 feedback_content
  *
- * 產出兩份資料：
- *   content         → 多行可讀文字，供「客戶描述」區塊顯示
- *   selectedOptions → 僅選擇題（單選/複選）的答案，供 Badge 顯示
- * 另外回傳從答案中辨識出的聯絡資訊與地址，因為外層 contact_* 欄位
- * 只有 hash、沒有明文（實測 contact_name/mobile/email 皆為空字串）。
+ * 兩種已知格式先各自拆成逐題的中間表示，再交給 summarizeAnswers
+ * 產出文字摘要、Badge 用選項、依表單順序的逐題作答與聯絡資訊。
  */
 function parseFeedbackContent(
   raw: ApiFeedbackItem['feedback_content'],
@@ -845,87 +1038,23 @@ function parseFeedbackContent(
 
   // 新版格式（App 現行）：{ answers: [...], form_id }
   if (Array.isArray(obj.answers)) {
-    return parseNewFormatAnswers(obj.answers, lookup)
+    return summarizeAnswers(extractNewFormatAnswers(obj.answers, lookup), lookup)
   }
 
-  const topics = Array.isArray(obj.data) ? obj.data : []
+  // 舊版格式：{ data: [ { topicId, type, answerList } ], formId }
+  if (Array.isArray(obj.data) && obj.data.length > 0) {
+    return summarizeAnswers(extractOldFormatAnswers(obj.data), lookup)
+  }
 
   // 最後退路：兩種已知格式都不符時逐鍵展平，僅保留可讀的純量值
-  if (topics.length === 0) {
-    const lines: string[] = []
-    for (const [key, value] of Object.entries(obj)) {
-      if (value == null || value === '') continue
-      if (key === 'calculations' || key === 'formId' || key === 'form_id') continue
-      const text = scalarValueToText(value)
-      if (text) lines.push(`${key}：${text}`)
-    }
-    return { content: lines.join('\n'), selectedOptions: [] }
-  }
-
   const lines: string[] = []
-  const options: string[] = []
-  let detectedName: string | undefined
-  let detectedPhone: string | undefined
-  let detectedEmail: string | undefined
-  let detectedAddress: string | undefined
-
-  for (const t of topics) {
-    const answers = [...(t.answerList ?? [])].sort(
-      (a, b) => (a.sort ?? 0) - (b.sort ?? 0)
-    )
-    const photoCount = t.type === '6' ? answers.length : 0
-    const texts = answers.map((a) => answerToText(a, t.type)).filter(Boolean)
-
-    // 標籤優先序：真實題目標題 → 型別名稱 → 無標籤
-    const realTitle = t.topicId != null ? lookup?.topicTitles.get(t.topicId) : undefined
-    const typeLabel = t.type
-      ? mock.FIELD_INPUT_TYPE_LABELS[mapTopicType(t.type)]
-      : undefined
-    const label = realTitle ?? typeLabel
-
-    if (photoCount > 0) {
-      lines.push(`${label ?? '照片'}：${photoCount} 張`)
-      continue
-    }
-    if (texts.length === 0) continue
-
-    const joined = texts.join('、')
-    lines.push(label ? `${label}：${joined}` : joined)
-
-    // 選擇題答案供 Badge 使用
-    if (t.type && CHOICE_TOPIC_TYPES.includes(t.type)) {
-      options.push(...texts)
-    }
-
-    // 辨識聯絡資訊（外層 contact_* 欄位僅有 hash，無明文可用）。
-    // 有真實題目標題時以標題為準，否則退回格式判斷。
-    for (const text of texts) {
-      const byTitle = realTitle ?? ''
-      if (!detectedName && /姓名|聯絡人|稱謂/.test(byTitle)) detectedName = text
-      else if (!detectedPhone && /電話|手機|行動/.test(byTitle)) detectedPhone = text
-      else if (!detectedEmail && /email|信箱|郵件/i.test(byTitle)) detectedEmail = text
-      else if (!detectedAddress && /地址|地區|縣市/.test(byTitle)) detectedAddress = text
-      else if (!detectedEmail && text.includes('@')) detectedEmail = text
-      else if (!detectedPhone && /^0\d[\d-]{7,}$/.test(text)) detectedPhone = text
-      else if (
-        !detectedAddress &&
-        (t.type === '5' || text.length > 6) &&
-        /[縣市區鄉鎮路街]/.test(text)
-      )
-        detectedAddress = text
-      else if (!detectedName && !t.type && text.length <= 10 && !/\d/.test(text))
-        detectedName = text
-    }
+  for (const [key, value] of Object.entries(obj)) {
+    if (value == null || value === '') continue
+    if (key === 'calculations' || key === 'formId' || key === 'form_id') continue
+    const text = scalarValueToText(value)
+    if (text) lines.push(`${key}：${text}`)
   }
-
-  return {
-    content: lines.join('\n'),
-    selectedOptions: options,
-    detectedName,
-    detectedPhone,
-    detectedEmail,
-    detectedAddress,
-  }
+  return { content: lines.join('\n'), selectedOptions: [] }
 }
 
 function mapApiFeedbackToLocal(
@@ -961,6 +1090,8 @@ function mapApiFeedbackToLocal(
     content: parsed.content,
     createdAt: item.cre_time ? new Date(item.cre_time).toLocaleString('zh-TW') : '',
     serviceId: item.service_id ?? undefined,
+    formId: item.form_id ?? undefined,
+    answerSections: parsed.answerSections,
   }
 }
 
@@ -2378,6 +2509,14 @@ function mapReviewSummary(data: ApiReviewSummary): mock.AiAnalysis {
   }
 }
 
+/** 直接取 AI 摘要並映射；錯誤（含 404）原樣丟出，供呼叫端各自決定退路 */
+async function fetchReviewSummaryOrThrow(): Promise<mock.AiAnalysis> {
+  const data = await apiFetch<ApiReviewSummary>(
+    `/merchant-api/vendors/${currentVendorId}/review-summary`
+  )
+  return mapReviewSummary(data)
+}
+
 /**
  * 由原始評價即時推導分析（AI 摘要尚未生成時的替代方案）
  *
@@ -2405,10 +2544,7 @@ async function deriveAnalysisFromReviewsEndpoint(): Promise<mock.AiAnalysis | nu
  */
 export async function getDashboardAiAnalysis(): Promise<mock.AiAnalysis | null> {
   try {
-    const data = await apiFetch<ApiReviewSummary>(
-      `/merchant-api/vendors/${currentVendorId}/review-summary`
-    )
-    return mapReviewSummary(data)
+    return await fetchReviewSummaryOrThrow()
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
       console.info('[ReviewSummary] 尚未生成 AI 摘要，改由原始評價即時推導')
@@ -2423,6 +2559,114 @@ export async function getDashboardAiAnalysis(): Promise<mock.AiAnalysis | null> 
     notifyError('評價摘要暫時無法載入，請稍後再試')
     return null
   }
+}
+
+/**
+ * POST /merchant-api/vendors/{id}/review-summary/refresh 回應
+ * 立即回 202，代表「已排入生成」，不代表摘要已產出。
+ */
+interface ApiRefreshAccepted {
+  accepted?: boolean
+  message?: string
+  vendor_id?: number
+}
+
+/** 重新生成摘要的進行階段，供 UI 顯示對應提示 */
+export type SummaryRefreshPhase = 'triggering' | 'generating' | 'done' | 'timeout'
+
+const SUMMARY_POLL_INTERVAL_MS = 3000
+const SUMMARY_POLL_TIMEOUT_MS = 90_000
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * 17b. 主動觸發重新生成 AI 摘要，並**等到 AI 真的產出結果才回傳**
+ * POST /merchant-api/vendors/{service_vendor_id}/review-summary/refresh
+ *
+ * 後端以 async invoke（InvocationType=Event）觸發 aiwave-review-summary Lambda，
+ * 端點立即回 202 —— 這時摘要還沒生成。因此這裡必須輪詢
+ * GET /review-summary 的 generate_status（01=生成中 02=已完成 03=失敗），
+ * 並比對 generate_time 是否已更新，確認拿到的是「新的那一份」才回傳。
+ * 少了這段等待，畫面會秒回舊摘要，看起來像沒有重新生成。
+ *
+ * 觸發失敗（例如 503：Lambda 未部署或 EC2 role 缺 lambda:InvokeFunction 權限）
+ * 時退回單純讀取現有摘要，並明確告知使用者原因。
+ */
+export async function regenerateDashboardAiAnalysis(
+  options: {
+    onPhase?: (phase: SummaryRefreshPhase) => void
+    /** 最長等待時間，預設 90 秒 */
+    timeoutMs?: number
+    /** 輪詢間隔，預設 3 秒 */
+    intervalMs?: number
+  } = {}
+): Promise<mock.AiAnalysis | null> {
+  const {
+    onPhase,
+    timeoutMs = SUMMARY_POLL_TIMEOUT_MS,
+    intervalMs = SUMMARY_POLL_INTERVAL_MS,
+  } = options
+
+  // 先記下目前的 generate_time 當基準，才能分辨後來拿到的是新的還是舊的那份
+  let baselineTime: string | undefined
+  try {
+    baselineTime = (await fetchReviewSummaryOrThrow()).generateTime
+  } catch (err) {
+    // 404（從未生成過）或暫時失敗都不影響觸發，只是少了比對基準
+    console.info('[ReviewSummary] 無既有摘要可作為比對基準:', err)
+  }
+
+  onPhase?.('triggering')
+  try {
+    await apiFetch<ApiRefreshAccepted>(
+      `/merchant-api/vendors/${currentVendorId}/review-summary/refresh`,
+      { method: 'POST' }
+    )
+  } catch (err) {
+    console.warn('[ReviewSummary] 觸發重新生成失敗:', err)
+    notifyError(
+      err instanceof ApiError && err.status === 503
+        ? '後端目前無法觸發 AI 生成（Lambda 未部署或權限不足），已改為讀取現有摘要'
+        : '無法觸發 AI 重新生成，已改為讀取現有摘要'
+    )
+    onPhase?.('done')
+    return getDashboardAiAnalysis()
+  }
+
+  // Lambda 在背景跑，這裡等它把結果寫回 mms_review_summary
+  onPhase?.('generating')
+  const deadline = Date.now() + timeoutMs
+  let latest: mock.AiAnalysis | null = null
+
+  while (Date.now() < deadline) {
+    await sleep(intervalMs)
+    try {
+      latest = await fetchReviewSummaryOrThrow()
+    } catch (err) {
+      // 生成中偶發的 404 / 5xx 不中斷，繼續等下一輪
+      console.info('[ReviewSummary] 輪詢中，稍後重試:', err)
+      continue
+    }
+
+    // 03=失敗 也算有結果：讓畫面顯示後端回傳的失敗原因
+    if (latest.generateStatus === '03') {
+      onPhase?.('done')
+      return latest
+    }
+    // 02=已完成，且 generate_time 與基準不同 → 確定是新生成的那一份
+    if (
+      latest.generateStatus === '02' &&
+      (baselineTime == null || latest.generateTime !== baselineTime)
+    ) {
+      onPhase?.('done')
+      return latest
+    }
+  }
+
+  // 逾時：不假裝完成，保留畫面上既有內容並提示可再試一次
+  onPhase?.('timeout')
+  notifyError('AI 摘要仍在生成中，請稍後再按一次「重新生成摘要」')
+  return latest ?? (await getDashboardAiAnalysis())
 }
 
 // ════════════════════════════════════════════════════════════
@@ -2552,6 +2796,8 @@ export type {
   SummaryGenerateStatus,
   ServiceReviewBreakdown,
   OrderVendorData,
+  FeedbackAnswerItem,
+  FeedbackAnswerSection,
   DashboardStats,
   OrderTrend,
   FormFeedback,
