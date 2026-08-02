@@ -792,6 +792,56 @@ async def get_vendor_reviews(
     return reviews
 
 
+@router.get("/services/{service_id}/reviews")
+async def get_service_reviews(
+    service_id: int,
+    db_api: DbApiClient = Depends(get_db_api_client),
+):
+    """取得某個服務項目底下全部訂單的評價（完整內容）
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID
+
+    **輸出**：評價物件陣列（不分頁，一次回傳全部）
+    ```json
+    [
+      {
+        "record_id": 1, "order_no": "...", "service_vendor_id": 1, "service_id": 17,
+        "inbr_account_id": "...", "overall_rating": 5,
+        "rating_detail": { "service": 5, "attitude": 4 },
+        "review_content": "服務很好，準時到府", "media": ["https://.../photo1.jpg"],
+        "status": "01", "is_deleted": false, "cre_time": "...", "upd_time": "..."
+      }
+    ]
+    ```
+    每筆欄位對應 `mms_order_review` 完整內容（`ReviewOut`），非公開評價牆的
+    精簡格式，包含 `inbr_account_id`、`order_no` 等內部欄位。
+
+    **說明**
+
+    給商家後台查看單一服務項目全部評價用（範圍限定該服務項目，
+    不含同商家的其他服務），例如檢視某個服務項目的評分/評論做改善參考。
+
+    api_server 沒有「直接依 service_id 查完整評價」的端點——現成的
+    `GET /services/{service_id}/reviews` 是公開評價牆，回傳精簡過的
+    `PublicReviewOut`（刻意排除 `inbr_account_id`/`order_no`/
+    `service_vendor_id`/`status` 等欄位）。這裡改用以下組合取得完整欄位：
+    1. `GET /services/{service_id}` 查出該服務所屬的 `service_vendor_id`
+    2. `GET /vendors/{service_vendor_id}/reviews?service_id={service_id}`
+       （帶 service_id 篩選）並自動分頁抓取到底
+
+    對應 APP 端同名端點（`GET /app-api/services/{id}/reviews`），
+    邏輯完全相同，僅路由分屬不同前端。
+    """
+    service_resp = await db_api.get(f"/services/{service_id}")
+    service_vendor_id = service_resp.json()["service_vendor_id"]
+
+    reviews = await db_api.get_all_items(
+        f"/vendors/{service_vendor_id}/reviews", params={"service_id": service_id}
+    )
+    return reviews
+
+
 @router.put("/services/{service_id}/review-summary")
 async def upsert_service_review_summary(
     service_id: int,
