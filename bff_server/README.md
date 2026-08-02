@@ -128,11 +128,12 @@ app/
 | 16 | PUT | `/services/{service_id}/review-summary` | 寫回服務項目評價 AI 摘要（純轉發，不呼叫 LLM） |
 | 17 | GET | `/vendors/{service_vendor_id}/review-summary` | 商家整合評價 AI 摘要（轉發，含 is_stale 計算欄位） |
 | 18 | PUT | `/vendors/{service_vendor_id}/review-summary` | 寫回商家整合評價 AI 摘要（純轉發，不呼叫 LLM） |
-| 19 | GET | `/vendors/{service_vendor_id}/orders` | 該商家的訂單清單（含 review 欄位） |
-| 20 | PATCH | `/vendors/{service_vendor_id}/orders/{record_id}` | 更新特定訂單（狀態/金額/時間） |
-| 21 | GET | `/vendors/{service_vendor_id}` | 取得商家資訊（商家屬性 + 管理帳號清單） |
-| 22 | PATCH | `/vendors/{service_vendor_id}` | 設定商家資訊（商家屬性 + 管理帳號聯絡方式） |
-| 23 | POST | `/auth/login` | 商家後台登入，回傳 service_vendor_id + account_id |
+| 19 | POST | `/vendors/{service_vendor_id}/review-summary/refresh` | 主動觸發重新生成商家 AI 摘要（async invoke Lambda，立即回傳 202） |
+| 20 | GET | `/vendors/{service_vendor_id}/orders` | 該商家的訂單清單（含 review 欄位） |
+| 21 | PATCH | `/vendors/{service_vendor_id}/orders/{record_id}` | 更新特定訂單（狀態/金額/時間） |
+| 22 | GET | `/vendors/{service_vendor_id}` | 取得商家資訊（商家屬性 + 管理帳號清單） |
+| 23 | PATCH | `/vendors/{service_vendor_id}` | 設定商家資訊（商家屬性 + 管理帳號聯絡方式） |
+| 24 | POST | `/auth/login` | 商家後台登入，回傳 service_vendor_id + account_id |
 
 ## 注意事項
 

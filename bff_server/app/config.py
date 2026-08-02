@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     # 本層自己對前端的 CORS 設定（本地開發用）
     cors_allow_origins: str = "*"
 
+    # ---------------- AI Summary Lambda ----------------
+    # ai-summary-lambda 的 Lambda function name，供 merchant_api 的
+    # review-summary/refresh 端點 async invoke 用。
+    # 預設值已填入目前部署的 function name，通常不需要改。
+    lambda_summary_function_name: str = "aiwave-review-summary"
+    lambda_aws_region: str = "us-west-2"
+
     # ---------------- AI 管家（AgentCore Runtime）----------------
     # AgentCore Runtime 只接受 SigV4(IAM) 驗證，前端拿不到憑證也不該拿，
     # 所以由這一層用 EC2 instance role 代為呼叫並把 SSE 轉發給前端。

@@ -970,6 +970,77 @@ async def upsert_vendor_review_summary(
     return resp.json()
 
 
+@router.post("/vendors/{service_vendor_id}/review-summary/refresh", status_code=202)
+async def refresh_vendor_review_summary(
+    service_vendor_id: int,
+):
+    """主動觸發重新生成該商家的評價 AI 摘要（非同步，立即回傳）
+
+    **輸入**
+    - `service_vendor_id` (path, int): 服務商 ID
+
+    **輸出**
+    ```json
+    {
+      "accepted": true,
+      "message": "AI 摘要生成已觸發，請稍後重新查詢 GET .../review-summary 取得最新結果。",
+      "vendor_id": 1
+    }
+    ```
+
+    **說明**
+
+    以 **async invoke（InvocationType=Event）** 方式觸發 `aiwave-review-summary` Lambda，
+    Lambda 在背景非同步執行，此端點**立即回傳 202**，前端不需要等待 LLM 生成完成。
+
+    觸發後 Lambda 只會跑該商家的摘要（`mode=merchant, vendor_id={service_vendor_id}`），
+    不影響其他商家或消費者摘要。
+
+    生成進度可透過 `GET /vendors/{service_vendor_id}/review-summary` 的
+    `generate_status` 欄位追蹤（`01`=生成中 `02`=已完成 `03`=失敗），
+    或觀察 `generate_time` 是否更新。
+
+    ⚠️ 此端點需要 EC2 instance role 具備 `lambda:InvokeFunction` 權限。
+    若 Lambda 尚未部署或 role 缺少權限，會回傳 503。
+    """
+    import json
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+    from fastapi import HTTPException
+
+    from app.config import get_settings
+
+    settings = get_settings()
+    function_name = settings.lambda_summary_function_name
+    region = settings.lambda_aws_region
+
+    payload = json.dumps({
+        "mode": "merchant",
+        "vendor_id": str(service_vendor_id),
+    }).encode()
+
+    try:
+        lambda_client = boto3.client("lambda", region_name=region)
+        lambda_client.invoke(
+            FunctionName=function_name,
+            InvocationType="Event",   # async，立即回傳 202，Lambda 在背景跑
+            Payload=payload,
+        )
+    except ClientError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Lambda invoke 失敗: {e.response['Error']['Message']}",
+        ) from e
+    except BotoCoreError as e:
+        raise HTTPException(status_code=503, detail=f"Lambda invoke 失敗: {e}") from e
+
+    return {
+        "accepted": True,
+        "message": "AI 摘要生成已觸發，請稍後重新查詢 GET .../review-summary 取得最新結果。",
+        "vendor_id": service_vendor_id,
+    }
+
+
 @router.get("/vendors/{service_vendor_id}/orders")
 async def list_orders(
     service_vendor_id: int,
