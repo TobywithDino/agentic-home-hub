@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.agent_client import ButlerAgentClient, get_agent_client
 from app.client import DbApiClient
 from app.deps import get_db_api_client
+from app.order_enrich_utils import attach_names_to_orders
 from app.review_utils import attach_reviews_to_orders
 
 router = APIRouter(prefix="/app-api", tags=["APP 端"])
@@ -491,6 +492,8 @@ async def view_orders(
       "orders": [
         {
           "record_id": 1, "order_no": "...", "order_status": "12",
+          "service_id": 17, "service_name": "水電修繕-一般維修",
+          "service_vendor_id": 1, "vendor_name": "服務商名稱",
           "review": { "overall_rating": 5, "review_content": "..." },
           "...": "..."
         }
@@ -498,14 +501,18 @@ async def view_orders(
     }
     ```
     - `feedbacks`：狀態為未處理（`status="0"`）的諮詢回饋單
-    - `orders`：該會員的全部訂單，每筆訂單附加 `review` 欄位——
-      有評價過的訂單是完整評價物件，沒評價過則是 `null`
+    - `orders`：該會員的全部訂單，每筆訂單附加：
+      - `service_name`：`service_id` 對應的服務項目名稱（查無則為 `null`）
+      - `vendor_name`：`service_vendor_id` 對應的商家名稱（查無則為 `null`）
+      - `review`：有評價過的訂單是完整評價物件，沒評價過則是 `null`
 
     **說明**
 
     取得該會員的未處理諮詢與全部訂單，組裝後一次回傳，
-    供前端顯示訂單/諮詢總覽頁面。訂單評價（`mms_order_review`）
-    一併查出並附加到對應訂單上，前端不需要再另外呼叫評價 API。
+    供前端顯示訂單/諮詢總覽頁面，不需要前端再另外查詢服務項目/商家名稱
+    或評價 API。訂單評價（`mms_order_review`）一併查出並附加到對應訂單上；
+    `service_name`/`vendor_name` 則依訂單裡的 `service_id`/`service_vendor_id`
+    查詢對照（同一批訂單裡重複出現的 service/vendor 只會各查一次）。
     """
     feedbacks_resp = await db_api.get(f"/users/{inbr_account_id}/feedbacks", params={"limit": 200})
     orders_resp = await db_api.get(f"/users/{inbr_account_id}/orders", params={"limit": 200})
@@ -516,6 +523,7 @@ async def view_orders(
     reviews = reviews_resp.json()["items"]
 
     orders = attach_reviews_to_orders(orders, reviews)
+    orders = await attach_names_to_orders(orders, db_api)
 
     return {"feedbacks": feedbacks, "orders": orders}
 
