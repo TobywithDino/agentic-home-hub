@@ -6,6 +6,8 @@ APP 不直接打隊友的 DB Access API（Database/api_server），而是打這�
 這一層再去呼叫 api_server 拿資料，中間做排序、label filter、資料組裝等
 前端需要、但不適合放在純資料存取層的邏輯。
 """
+import random
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -16,6 +18,11 @@ from app.deps import get_db_api_client
 from app.review_utils import attach_reviews_to_orders
 
 router = APIRouter(prefix="/app-api", tags=["APP 端"])
+
+# mock_available_capacity 用：0~8 的加權分布，5~8 機率較高。
+# 索引對應數字 0~8，權重比例 1:1:1:1:1:3:3:3:3（5~8 是 0~4 的 3 倍機率）。
+_CAPACITY_VALUES = list(range(9))
+_CAPACITY_WEIGHTS = [1, 1, 1, 1, 1, 3, 3, 3, 3]
 
 
 class ButlerChatRequest(BaseModel):
@@ -72,6 +79,38 @@ async def butler_chat(
             "X-Session-Id": session_id,
         },
     )
+
+
+@router.get("/services/{service_id}/available-capacity")
+async def get_available_capacity(
+    service_id: int,
+    time: str,
+):
+    """查詢某服務項目在指定時段可接受的最大訂位人數
+
+    **輸入**
+    - `service_id` (path, int): 服務項目 ID（`cms_homepage_service.id`）
+    - `time` (query, string): 想查詢的時段，前端自訂格式即可
+      （例如 ISO 8601 `2026-08-02T18:00:00`），本端點不解析內容，僅回傳給前端對照
+
+    **輸出**
+    ```json
+    { "service_id": 17, "time": "2026-08-02T18:00:00", "available_capacity": 6 }
+    ```
+    `available_capacity`：0~8 的隨機整數，代表此時段可接受的最大訂位人數。
+
+    **說明**
+
+    ⚠️ 這是**暫時的隨機資料端點**，不查資料庫、不驗證 `service_id`/`time` 是否合法，
+    純粹回傳隨機數字，給前端先串接「訂位人數上限」UI 流程用，之後有真實
+    庫存/座位管理邏輯時再換成正式實作。
+
+    數字採加權隨機：0~4 與 5~8 的機率比例為 1:3（5~8 明顯比較容易出現），
+    模擬「大部分時段還有位、少數時段快滿」的情境。同一組 `service_id`+`time`
+    重複呼叫**不保證**回傳相同數字（無快取，每次即時擲骰）。
+    """
+    capacity = random.choices(_CAPACITY_VALUES, weights=_CAPACITY_WEIGHTS, k=1)[0]
+    return {"service_id": service_id, "time": time, "available_capacity": capacity}
 
 
 @router.get("/service-types/{service_type}/vendors")
