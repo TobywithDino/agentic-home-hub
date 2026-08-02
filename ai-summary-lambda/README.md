@@ -199,26 +199,14 @@ LLM 摘要開頭會說明資料來源非近期；完全無任何評價時輸出�
 
 > Function URL 受 workshop SCP 封鎖（403 Forbidden），使用 AWS CLI invoke。
 
-### 跑單一商家（demo 推薦）
+### 只跑所有服務摘要（消費者）
 
 ```bash
 aws lambda invoke \
   --function-name aiwave-review-summary \
   --region us-west-2 \
   --profile agentic-home-hub \
-  --payload "{\"mode\":\"merchant\",\"vendor_id\":\"1\"}" \
-  --cli-binary-format raw-in-base64-out \
-  out.json && cat out.json
-```
-
-### 跑單一服務（消費者摘要）
-
-```bash
-aws lambda invoke \
-  --function-name aiwave-review-summary \
-  --region us-west-2 \
-  --profile agentic-home-hub \
-  --payload "{\"mode\":\"consumer\",\"service_id\":\"1\"}" \
+  --payload "{\"mode\":\"consumer\"}" \
   --cli-binary-format raw-in-base64-out \
   out.json && cat out.json
 ```
